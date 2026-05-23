@@ -1,0 +1,10 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "rfq_processor",
+  "description": "Processes manufacturing RFQs end-to-end",
+  "entry": "main@v3",
+  "tools_required": [
+    "supplier_api.get_price@v1"
+  ]
+}

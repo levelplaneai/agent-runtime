@@ -1,0 +1,18 @@
+{
+  "description": "Generate a haiku about a topic, then critique it",
+  "inputs": {
+    "topic": { "type": "string" }
+  },
+  "outputs": {
+    "haiku": { "from": "$.make_haiku.output" },
+    "critique": { "from": "$.critique_haiku.output" }
+  },
+  "entry": "make_haiku",
+  "nodes": {
+    "make_haiku": "make_haiku@v1",
+    "critique_haiku": "critique_haiku@v1"
+  },
+  "edges": [
+    { "from": "make_haiku", "to": "critique_haiku" }
+  ]
+}

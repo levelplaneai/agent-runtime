@@ -1,0 +1,14 @@
+# secrets
+.env
+
+# compiled binary (root only)
+/agent-runtime
+
+# SDK run data
+.agent-runtime/
+
+# ad-hoc trace output
+*.jsonl
+
+# macOS
+.DS_Store

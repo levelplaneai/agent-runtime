@@ -1,0 +1,18 @@
+{
+  "type": "tool_call",
+  "description": "Fetch current price for a part from supplier API",
+  "inputs": {
+    "part": { "from": "$.item.part_number" }
+  },
+  "config": {
+    "tool": "supplier_api.get_price@v1",
+    "args": { "part_number": "{{ part }}" }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "price": { "type": "number" }
+    }
+  },
+  "on_error": "retry:2"
+}

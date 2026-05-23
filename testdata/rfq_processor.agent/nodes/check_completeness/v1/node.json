@@ -1,0 +1,14 @@
+{
+  "type": "router",
+  "description": "Route based on whether RFQ has all required fields",
+  "inputs": {
+    "items": { "from": "$.extract_items.output.items" }
+  },
+  "config": {
+    "branches": [
+      { "when": "$.inputs.items.length == 0", "goto": "price_each_item" },
+      { "default": true, "goto": "price_each_item" }
+    ]
+  },
+  "on_error": "fail"
+}

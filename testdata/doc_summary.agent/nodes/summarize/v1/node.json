@@ -1,0 +1,25 @@
+{
+  "type": "prompt",
+  "description": "Read the attached document and return a summary with key points",
+  "inputs": {
+    "document": { "from": "$.inputs.document" }
+  },
+  "config": {
+    "model": "anthropic/claude-haiku-4-5-20251001",
+    "system": "You are a precise document analyst. Read the provided document carefully and return structured JSON.",
+    "user": "Please summarize the attached document {{ document }} and extract its key points."
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": { "type": "string" },
+      "key_points": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "word_count_estimate": { "type": "integer" }
+    },
+    "required": ["summary", "key_points", "word_count_estimate"]
+  },
+  "on_error": "retry:2"
+}

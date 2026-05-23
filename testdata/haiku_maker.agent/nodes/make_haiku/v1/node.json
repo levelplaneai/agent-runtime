@@ -1,0 +1,25 @@
+{
+  "type": "prompt",
+  "description": "Write a haiku (5-7-5 syllables) about the given topic",
+  "inputs": {
+    "topic": { "from": "$.inputs.topic" }
+  },
+  "config": {
+    "model": "anthropic/claude-haiku-4-5-20251001",
+    "system": "You are a haiku poet. Write haiku with strict 5-7-5 syllable structure. Return only JSON.",
+    "user": "Write a haiku about: {{ topic }}",
+    "temperature": 0.7
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "lines": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "title": { "type": "string" }
+    },
+    "required": ["lines", "title"]
+  },
+  "on_error": "retry:2"
+}

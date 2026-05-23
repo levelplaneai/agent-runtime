@@ -1,0 +1,8 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "doc_summary",
+  "description": "Summarizes an uploaded document and extracts key points",
+  "entry": "main@v1",
+  "tools_required": []
+}

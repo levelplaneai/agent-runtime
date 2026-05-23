@@ -1,0 +1,21 @@
+{
+  "description": "Extracts line items from RFQ, prices each, generates quote",
+  "inputs": {
+    "rfq_document": { "type": "string" }
+  },
+  "outputs": {
+    "final_quote": { "from": "$.synthesize_quote.output" }
+  },
+  "entry": "extract_items",
+  "nodes": {
+    "extract_items": "extract_items@v3",
+    "check_completeness": "check_completeness@v1",
+    "price_each_item": "price_each_item@v1",
+    "price_one_item": "price_one_item@v2",
+    "synthesize_quote": "synthesize_quote@v2"
+  },
+  "edges": [
+    { "from": "extract_items", "to": "check_completeness" },
+    { "from": "price_each_item", "to": "synthesize_quote" }
+  ]
+}

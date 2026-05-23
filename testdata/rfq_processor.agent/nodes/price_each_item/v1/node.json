@@ -1,0 +1,21 @@
+{
+  "type": "map",
+  "description": "Run pricing on each line item",
+  "config": {
+    "over": "$.extract_items.output.items",
+    "as": "item",
+    "do": "price_one_item",
+    "concurrency": 5
+  },
+  "output_schema": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "properties": {
+        "part_number": { "type": "string" },
+        "price": { "type": "number" }
+      }
+    }
+  },
+  "on_error": "retry:2"
+}

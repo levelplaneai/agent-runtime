@@ -1,0 +1,16 @@
+{
+  "description": "Summarize a document and extract its key points",
+  "inputs": {
+    "document": { "type": "file" }
+  },
+  "outputs": {
+    "summary": { "from": "$.summarize.output.summary" },
+    "key_points": { "from": "$.summarize.output.key_points" },
+    "word_count_estimate": { "from": "$.summarize.output.word_count_estimate" }
+  },
+  "entry": "summarize",
+  "nodes": {
+    "summarize": "summarize@v1"
+  },
+  "edges": []
+}

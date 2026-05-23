@@ -1,0 +1,17 @@
+{
+  "description": "Fetch the current price for a part number from the supplier API",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "part_number": { "type": "string" }
+    },
+    "required": ["part_number"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "price": { "type": "number" }
+    },
+    "required": ["price"]
+  }
+}

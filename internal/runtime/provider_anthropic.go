@@ -1,0 +1,142 @@
+package runtime
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+// AnthropicProvider implements LLMProvider using the Anthropic Messages API.
+type AnthropicProvider struct {
+	client *anthropic.Client
+}
+
+// NewAnthropicProvider wraps an Anthropic SDK client.
+func NewAnthropicProvider(client *anthropic.Client) *AnthropicProvider {
+	return &AnthropicProvider{client: client}
+}
+
+func (p *AnthropicProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(req.Model),
+		MaxTokens: int64(req.MaxTokens),
+	}
+
+	if req.System != "" {
+		params.System = []anthropic.TextBlockParam{{Text: req.System}}
+	}
+
+	msgs := make([]anthropic.MessageParam, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		blocks, err := anthropicBlocks(m)
+		if err != nil {
+			return CompletionResponse{}, err
+		}
+		switch strings.ToLower(m.Role) {
+		case "user":
+			msgs = append(msgs, anthropic.NewUserMessage(blocks...))
+		case "assistant":
+			msgs = append(msgs, anthropic.NewAssistantMessage(blocks...))
+		default:
+			return CompletionResponse{}, fmt.Errorf("anthropic: unknown role %q", m.Role)
+		}
+	}
+	params.Messages = msgs
+
+	if req.OutputSchema != nil {
+		params.OutputConfig = anthropic.OutputConfigParam{
+			Format: anthropic.JSONOutputFormatParam{Schema: enforceAdditionalProperties(req.OutputSchema)},
+		}
+	}
+
+	if req.Temperature != nil {
+		params.Temperature = anthropic.Float(*req.Temperature)
+	}
+
+	resp, err := p.client.Messages.New(ctx, params)
+	if err != nil {
+		return CompletionResponse{}, fmt.Errorf("anthropic: API call failed: %w", err)
+	}
+
+	for _, block := range resp.Content {
+		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
+			return CompletionResponse{
+				Content:      tb.Text,
+				InputTokens:  resp.Usage.InputTokens,
+				OutputTokens: resp.Usage.OutputTokens,
+			}, nil
+		}
+	}
+	return CompletionResponse{}, fmt.Errorf("anthropic: no text block in response (stop_reason: %s)", resp.StopReason)
+}
+
+// enforceAdditionalProperties recursively sets "additionalProperties": false on
+// every object schema node. Anthropic's structured output API requires this on
+// all object types.
+func enforceAdditionalProperties(schema map[string]any) map[string]any {
+	out := make(map[string]any, len(schema))
+	for k, v := range schema {
+		out[k] = v
+	}
+
+	if out["type"] == "object" {
+		if _, exists := out["additionalProperties"]; !exists {
+			out["additionalProperties"] = false
+		}
+		if props, ok := out["properties"].(map[string]any); ok {
+			newProps := make(map[string]any, len(props))
+			for k, v := range props {
+				if sub, ok := v.(map[string]any); ok {
+					newProps[k] = enforceAdditionalProperties(sub)
+				} else {
+					newProps[k] = v
+				}
+			}
+			out["properties"] = newProps
+		}
+	}
+
+	if items, ok := out["items"].(map[string]any); ok {
+		out["items"] = enforceAdditionalProperties(items)
+	}
+
+	return out
+}
+
+// anthropicBlocks converts a Message to Anthropic content block params.
+// For plain text messages (Blocks == nil) it returns a single text block.
+// For multimodal messages it maps each ContentBlock to the appropriate Anthropic type.
+func anthropicBlocks(m Message) ([]anthropic.ContentBlockParamUnion, error) {
+	if m.Blocks == nil {
+		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}, nil
+	}
+
+	out := make([]anthropic.ContentBlockParamUnion, 0, len(m.Blocks))
+	for _, b := range m.Blocks {
+		switch b.Type {
+		case "text":
+			out = append(out, anthropic.NewTextBlock(b.Text))
+		case "image":
+			encoded := base64.StdEncoding.EncodeToString(b.Data)
+			out = append(out, anthropic.NewImageBlockBase64(b.MediaType, encoded))
+		case "document":
+			encoded := base64.StdEncoding.EncodeToString(b.Data)
+			if b.MediaType == "application/pdf" {
+				out = append(out, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+					Data: encoded,
+				}))
+			} else {
+				// Plain-text documents (markdown, CSV, HTML, etc.) sent as text source.
+				out = append(out, anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{
+					Data: string(b.Data),
+				}))
+			}
+		default:
+			return nil, fmt.Errorf("anthropic: unsupported content block type %q", b.Type)
+		}
+	}
+	return out, nil
+}

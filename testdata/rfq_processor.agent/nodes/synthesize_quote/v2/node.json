@@ -1,0 +1,22 @@
+{
+  "type": "prompt",
+  "description": "Generate a final quote document from priced line items",
+  "inputs": {
+    "items": { "from": "$.price_each_item.output" }
+  },
+  "config": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "system": "You generate professional quote documents.",
+    "user": "Generate a quote for the following priced items: {{ items | json }}",
+    "temperature": 0
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "quote_text": { "type": "string" },
+      "total_price": { "type": "number" }
+    },
+    "required": ["quote_text", "total_price"]
+  },
+  "on_error": "retry:2"
+}

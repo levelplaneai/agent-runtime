@@ -1,0 +1,5 @@
+Extract all line items from the following RFQ document:
+
+{{ rfq }}
+
+Return each item with its part number and quantity.

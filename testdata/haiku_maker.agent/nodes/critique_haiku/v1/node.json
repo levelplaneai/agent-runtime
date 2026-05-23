@@ -1,0 +1,23 @@
+{
+  "type": "prompt",
+  "description": "Critique the haiku for syllable accuracy and imagery quality",
+  "inputs": {
+    "haiku": { "from": "$.make_haiku.output" }
+  },
+  "config": {
+    "model": "anthropic/claude-haiku-4-5-20251001",
+    "system": "You are a poetry critic. Be concise and specific. Return only JSON.",
+    "user": "Critique this haiku:\n{{ haiku }}",
+    "temperature": 0
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "syllable_check": { "type": "string" },
+      "imagery_score": { "type": "integer" },
+      "feedback": { "type": "string" }
+    },
+    "required": ["syllable_check", "imagery_score", "feedback"]
+  },
+  "on_error": "retry:2"
+}

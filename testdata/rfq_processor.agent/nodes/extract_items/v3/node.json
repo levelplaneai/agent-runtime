@@ -1,0 +1,30 @@
+{
+  "type": "prompt",
+  "description": "Parse RFQ text into structured list of line items",
+  "inputs": {
+    "rfq": { "from": "$.inputs.rfq_document" }
+  },
+  "config": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "system": "You extract structured line items from RFQs.",
+    "temperature": 0
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "part_number": { "type": "string" },
+            "quantity": { "type": "integer" }
+          },
+          "required": ["part_number", "quantity"]
+        }
+      }
+    },
+    "required": ["items"]
+  },
+  "on_error": "retry:2"
+}
