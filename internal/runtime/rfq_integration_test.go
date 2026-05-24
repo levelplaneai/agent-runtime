@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 // TestRFQProcessor_Integration runs the rfq_processor bundle end-to-end.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 // --- topoSort tests ---

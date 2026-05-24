@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 var errTest = errors.New("test error")

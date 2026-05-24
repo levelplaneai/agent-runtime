@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 // mockProvider is a test double for LLMProvider that returns a fixed response.

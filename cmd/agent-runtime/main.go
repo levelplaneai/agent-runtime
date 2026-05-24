@@ -15,8 +15,8 @@ import (
 	"github.com/openai/openai-go"
 	"google.golang.org/genai"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
-	"github.com/aditya-vinodh/agent-runtime/internal/runtime"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/runtime"
 )
 
 func main() {

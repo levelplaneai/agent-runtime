@@ -1,4 +1,4 @@
-module github.com/aditya-vinodh/agent-runtime
+module github.com/levelplaneai/agent-runtime
 
 go 1.25.0
 

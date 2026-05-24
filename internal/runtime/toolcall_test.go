@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 func makeNode(t *testing.T, nodeJSON string) bundle.Node {

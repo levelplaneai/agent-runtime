@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aditya-vinodh/agent-runtime/internal/bundle"
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 // ExecutePrompt executes a prompt node:
