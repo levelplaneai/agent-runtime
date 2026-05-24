@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
@@ -65,9 +69,63 @@ func resolveNodeInputs(node bundle.Node, execCtx *ExecutionContext) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("resolving input %q: %w", name, err)
 		}
-		resolved[name] = val
+		if binding.Type == "file_path" {
+			fv, err := loadFileValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("resolving input %q: %w", name, err)
+			}
+			resolved[name] = fv
+		} else {
+			resolved[name] = val
+		}
 	}
 	return resolved, nil
+}
+
+// loadFileValue reads a file from the path given by val (which must be a non-empty
+// string) and returns a FileValue with detected MIME type.
+func loadFileValue(val any) (FileValue, error) {
+	path, ok := val.(string)
+	if !ok {
+		return FileValue{}, fmt.Errorf("type \"file_path\" requires a string, got %T", val)
+	}
+	if path == "" {
+		return FileValue{}, fmt.Errorf("type \"file_path\" path must not be empty")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return FileValue{}, fmt.Errorf("reading file %q: %w", path, err)
+	}
+	return FileValue{
+		Name:      filepath.Base(path),
+		Data:      data,
+		MediaType: detectMIMEType(path, data),
+	}, nil
+}
+
+// detectMIMEType returns the MIME type for the given path and data.
+// Extension-based detection is tried first for types that net/http.DetectContentType misses.
+func detectMIMEType(path string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".pdf":
+		return "application/pdf"
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".csv":
+		return "text/csv"
+	case ".html", ".htm":
+		return "text/html"
+	case ".xml":
+		return "text/xml"
+	case ".json":
+		return "application/json"
+	}
+	sniff := data
+	if len(sniff) > 512 {
+		sniff = sniff[:512]
+	}
+	return http.DetectContentType(sniff)
 }
 
 // configInt extracts a JSON integer value from a node's config map.

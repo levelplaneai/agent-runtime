@@ -89,7 +89,8 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
   "type": "...",
   "description": "What this node does",
   "inputs": {
-    "my_input": { "from": "$.path.to.value" }
+    "my_input": { "from": "$.path.to.value" },
+    "my_image": { "from": "$.crop_step.output.path", "type": "file_path" }
   },
   "config": { },
   "output_schema": { },
@@ -98,6 +99,15 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 ```
 
 `on_error`: `fail` | `skip` | `retry:N` (default `retry:2`)
+
+### Input binding types
+
+| `type` value | Behaviour |
+|---|---|
+| _(omitted)_ | Value is passed through as-is (string, number, object, array) |
+| `"file_path"` | Resolved value must be a string path; runtime reads the file and wraps it in a `FileValue` (binary + MIME type). On `prompt` nodes the file is sent as a multimodal image or document block. |
+
+`file_path` is useful when an earlier `tool_call` node produces a file (e.g. a cropped image) and a downstream `prompt` node needs to send it to the model as multimodal content. The MIME type is detected automatically from the file extension (`.png` → `image/png`, `.pdf` → `application/pdf`, etc.). A missing or unreadable file surfaces as a node error and is subject to `on_error`.
 
 ---
 
@@ -129,6 +139,7 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 - `{{ name }}` substitutes a declared input. Undeclared = validation error.
 - Omit `system`/`user` to load `system.prompt`/`user.prompt` files from the same directory.
 - Add `"tools": ["tool_name@v1"]` and optional `"max_tool_iterations": 10` to let the LLM call tools.
+- To pass a file as multimodal content (image or document), declare the input with `"type": "file_path"`. The runtime reads the file and appends it as a content block after the user message text. Works with any `FileValue` supplied at flow startup (via `--input key=@path`) or with a path string produced by an earlier `tool_call` node using `"type": "file_path"`.
 
 ---
 
@@ -269,7 +280,8 @@ The target flow's `inputs`/`outputs` define the contract.
 | `$.inputs.<field>` | flow input |
 | `$.<node_name>.output` | a node's full output |
 | `$.<node_name>.output.<path>` | drill into a node's output |
-| `$.<as_name>` | iteration variable inside a `map` |
+| `$.<as_name>` | iteration variable inside a `map` (the whole item) |
+| `$.<as_name>.<field>` | field of an iteration variable (e.g. `$.region.path`) |
 | `$.decision` | LLM router's chosen branch (inside router only) |
 
 Used in: `inputs[*].from`, `outputs[*].from`, `router.branches[*].when`, `map.config.over`.

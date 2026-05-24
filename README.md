@@ -23,7 +23,7 @@ agent-runtime validate ./my_agent.agent
 # Run a bundle
 agent-runtime run ./my_agent.agent --input topic="autumn rain"
 
-# Pass a file as input
+# Pass a file as input (available to prompt nodes as multimodal content)
 agent-runtime run ./my_agent.agent --input document=@./report.pdf
 
 # Write a JSON trace to file

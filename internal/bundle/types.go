@@ -35,6 +35,7 @@ type Flow struct {
 
 type InputBinding struct {
 	From string `json:"from"`
+	Type string `json:"type,omitempty"` // "file_path" → runtime reads file into FileValue
 }
 
 type Node struct {
