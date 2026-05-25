@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,6 +116,21 @@ func cmdRun(args []string) {
 			fmt.Fprintf(os.Stderr, "  - %s\n", t)
 		}
 		fmt.Fprintln(os.Stderr, `hint: use --tool name@version='{"key":"value"}' for a stub or --tool name@version=https://... for an HTTP service`)
+		os.Exit(1)
+	}
+
+	// Pre-flight: check for missing API keys before creating the run directory so that
+	// the SDK sees a clean non-zero exit (no partial meta.json) and can detect the error.
+	if missingKeys := collectMissingKeys(b); len(missingKeys) > 0 {
+		fmt.Fprintf(os.Stderr, "error: missing API key(s) required to run bundle %q\n\n", b.Manifest.Name)
+		for _, m := range missingKeys {
+			fmt.Fprintf(os.Stderr, "  %s\n", m.envVar)
+			fmt.Fprintf(os.Stderr, "    models : %s\n", strings.Join(m.models, ", "))
+			fmt.Fprintf(os.Stderr, "    nodes  : %s\n", strings.Join(m.nodes, ", "))
+			fmt.Fprintf(os.Stderr, "    fix    : export %s=<your-key>\n\n", m.envVar)
+			// Machine-readable marker parsed by the Python SDK.
+			fmt.Fprintf(os.Stderr, "missing-api-key: %s\n", m.envVar)
+		}
 		os.Exit(1)
 	}
 
@@ -386,6 +402,109 @@ func detectMIMEType(path string, data []byte) string {
 		sniff = sniff[:512]
 	}
 	return http.DetectContentType(sniff)
+}
+
+// knownProviderEnvVars maps provider prefix (from "provider/model") to its env var.
+// Only providers listed here are checked; unknown prefixes are silently skipped.
+var knownProviderEnvVars = map[string]string{
+	"anthropic": "ANTHROPIC_API_KEY",
+	"openai":    "OPENAI_API_KEY",
+	"gemini":    "GEMINI_API_KEY",
+}
+
+type missingKeyInfo struct {
+	envVar string
+	models []string
+	nodes  []string
+}
+
+// collectMissingKeys traverses only the nodes reachable from the bundle's entry flow
+// (recursing into subflows) and returns one missingKeyInfo per env var that is unset
+// but required by a node's config.model. Unreachable node versions are not checked.
+func collectMissingKeys(b *bundle.Bundle) []missingKeyInfo {
+	type detail struct {
+		models map[string]bool
+		nodes  map[string]bool
+	}
+	byEnv := make(map[string]*detail)
+	visited := make(map[string]bool)
+
+	var visitFlow func(name, version string)
+	visitFlow = func(name, version string) {
+		key := name + "@" + version
+		if visited[key] {
+			return
+		}
+		visited[key] = true
+
+		flow, ok := b.Flows[name][version]
+		if !ok {
+			return
+		}
+
+		for localName, ref := range flow.Nodes {
+			nodeName, nodeVersion, ok := bundle.ParseRef(ref)
+			if !ok {
+				continue
+			}
+			node, ok := b.Nodes[nodeName][nodeVersion]
+			if !ok {
+				continue
+			}
+
+			if modelRaw, ok := node.Config["model"]; ok {
+				var model string
+				if err := json.Unmarshal(modelRaw, &model); err == nil {
+					if idx := strings.IndexByte(model, '/'); idx != -1 {
+						provider := model[:idx]
+						if envVar, known := knownProviderEnvVars[provider]; known && os.Getenv(envVar) == "" {
+							if byEnv[envVar] == nil {
+								byEnv[envVar] = &detail{
+									models: make(map[string]bool),
+									nodes:  make(map[string]bool),
+								}
+							}
+							byEnv[envVar].models[model] = true
+							byEnv[envVar].nodes[localName] = true
+						}
+					}
+				}
+			}
+
+			if node.Type == "subflow" {
+				if flowRaw, ok := node.Config["flow"]; ok {
+					var flowRef string
+					if err := json.Unmarshal(flowRaw, &flowRef); err == nil {
+						if fn, fv, ok := bundle.ParseRef(flowRef); ok {
+							visitFlow(fn, fv)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	entryName, entryVersion, ok := bundle.ParseRef(b.Manifest.Entry)
+	if !ok {
+		return nil
+	}
+	visitFlow(entryName, entryVersion)
+
+	result := make([]missingKeyInfo, 0, len(byEnv))
+	for envVar, d := range byEnv {
+		info := missingKeyInfo{envVar: envVar}
+		for m := range d.models {
+			info.models = append(info.models, m)
+		}
+		for n := range d.nodes {
+			info.nodes = append(info.nodes, n)
+		}
+		sort.Strings(info.models)
+		sort.Strings(info.nodes)
+		result = append(result, info)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].envVar < result[j].envVar })
+	return result
 }
 
 // buildProviderRegistry creates a ProviderRegistry populated from environment variables.
