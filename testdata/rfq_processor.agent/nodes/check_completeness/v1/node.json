@@ -6,7 +6,7 @@
   },
   "config": {
     "branches": [
-      { "when": "$.inputs.items.length == 0", "goto": "price_each_item" },
+      { "when": { "field": "items", "op": "length_eq", "value": 0 }, "goto": "price_each_item" },
       { "default": true, "goto": "price_each_item" }
     ]
   },

@@ -200,12 +200,17 @@ Tool must be in `manifest.tools_required`.
   "inputs": { "items": { "from": "$.extract_items.output.items" } },
   "config": {
     "branches": [
-      { "when": "$.inputs.items.length == 0", "goto": "empty_handler" },
+      { "when": { "field": "items", "op": "length_eq", "value": 0 }, "goto": "empty_handler" },
       { "default": true, "goto": "process_items" }
     ]
   }
 }
 ```
+
+Each `when` is a structured condition object with three fields:
+- `field` — key in the node's resolved input map
+- `op` — operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `in`, `exists`, `length_eq`, `length_ne`, `length_gt`, `length_gte`, `length_lt`, `length_lte`
+- `value` — JSON value to compare against (omit for `exists`)
 
 **LLM-based:**
 ```json
@@ -220,9 +225,9 @@ Tool must be in `manifest.tools_required`.
       "choices": ["standard", "custom", "unclear"]
     },
     "branches": [
-      { "when": "$.decision == 'standard'", "goto": "standard_flow" },
-      { "when": "$.decision == 'custom'",   "goto": "custom_flow" },
-      { "default": true,                     "goto": "request_clarification" }
+      { "when": { "field": "decision", "op": "eq", "value": "standard" }, "goto": "standard_flow" },
+      { "when": { "field": "decision", "op": "eq", "value": "custom" },   "goto": "custom_flow" },
+      { "default": true,                                                    "goto": "request_clarification" }
     ]
   }
 }

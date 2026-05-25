@@ -6,18 +6,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
+// Condition is a structured predicate evaluated against the resolved input map.
+type Condition struct {
+	Field string          `json:"field"`
+	Op    string          `json:"op"`
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// String returns a human-readable representation for trace output.
+func (c Condition) String() string {
+	if c.Op == "exists" {
+		return c.Field + " exists"
+	}
+	return fmt.Sprintf("%s %s %s", c.Field, c.Op, string(c.Value))
+}
+
 // Branch is one conditional arm of a router node.
 type Branch struct {
-	When    string `json:"when"`
-	Default bool   `json:"default"`
-	Goto    string `json:"goto"`
+	When    *Condition `json:"when,omitempty"`
+	Default bool       `json:"default"`
+	Goto    string     `json:"goto"`
 }
 
 // decideWith holds the parsed config for an LLM-based router.
@@ -25,6 +40,15 @@ type decideWith struct {
 	Model   string   `json:"model"`
 	Prompt  string   `json:"prompt"`
 	Choices []string `json:"choices"`
+}
+
+var knownOps = map[string]bool{
+	"eq": true, "ne": true,
+	"gt": true, "gte": true, "lt": true, "lte": true,
+	"contains": true, "in": true, "exists": true,
+	"length_eq": true, "length_ne": true,
+	"length_gt": true, "length_gte": true,
+	"length_lt": true, "length_lte": true,
 }
 
 // ExecuteRouter evaluates a router node's branches in order and returns a
@@ -66,12 +90,12 @@ func ExecuteRouter(ctx context.Context, localName string, node bundle.Node, node
 			t.Emit(TraceEvent{Event: "router_branch", Node: localName, ChosenTarget: b.Goto})
 			return map[string]any{"_goto": b.Goto}, nil
 		}
-		match, err := evalWhen(b.When, resolved)
+		match, err := evalCondition(b.When, resolved)
 		if err != nil {
 			return nil, err
 		}
 		if match {
-			t.Emit(TraceEvent{Event: "router_branch", Node: localName, Condition: b.When, ChosenTarget: b.Goto})
+			t.Emit(TraceEvent{Event: "router_branch", Node: localName, Condition: b.When.String(), ChosenTarget: b.Goto})
 			return map[string]any{"_goto": b.Goto}, nil
 		}
 	}
@@ -185,65 +209,212 @@ func parseBranches(config map[string]json.RawMessage) ([]Branch, error) {
 	if err := json.Unmarshal(raw, &branches); err != nil {
 		return nil, fmt.Errorf("router: invalid 'branches': %w", err)
 	}
+	for i, b := range branches {
+		if b.Goto == "" {
+			return nil, fmt.Errorf("router: branch[%d]: goto must not be empty", i)
+		}
+		if b.Default && b.When != nil {
+			return nil, fmt.Errorf("router: branch[%d]: cannot have both default:true and a when condition", i)
+		}
+		if !b.Default {
+			if b.When == nil {
+				return nil, fmt.Errorf("router: branch[%d]: non-default branch must have a when condition", i)
+			}
+			if !knownOps[b.When.Op] {
+				return nil, fmt.Errorf("router: branch[%d]: unknown operator %q", i, b.When.Op)
+			}
+		}
+	}
 	return branches, nil
 }
 
-// evalWhen evaluates a when condition against a map of resolved node inputs.
-//
-// Supported patterns (v0.1):
-//
-//	"$.inputs.<field>.length == <int>"  — check array length
-//	"$.<field> == '<string>'"           — check string equality
-func evalWhen(when string, resolved map[string]any) (bool, error) {
-	when = strings.TrimSpace(when)
+// toFloat64 converts any numeric Go value to float64. Returns false if v is not numeric.
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
 
-	// Pattern: $.inputs.<field>.length == <int>
-	if strings.HasPrefix(when, "$.inputs.") && strings.Contains(when, ".length ==") {
-		withoutPrefix := strings.TrimPrefix(when, "$.inputs.")
-		dotLength := strings.Index(withoutPrefix, ".length ==")
-		if dotLength < 0 {
-			return false, fmt.Errorf("evalWhen: malformed condition %q", when)
-		}
-		field := withoutPrefix[:dotLength]
-		rhs := strings.TrimSpace(withoutPrefix[dotLength+len(".length =="):])
-		n, err := strconv.Atoi(rhs)
-		if err != nil {
-			return false, fmt.Errorf("evalWhen: expected integer after 'length ==', got %q", rhs)
-		}
-		val, ok := resolved[field]
-		if !ok {
-			return false, fmt.Errorf("evalWhen: input field %q not found in resolved inputs", field)
-		}
-		arr, ok := val.([]any)
-		if !ok {
-			return false, fmt.Errorf("evalWhen: input %q is not an array", field)
-		}
-		return len(arr) == n, nil
+// numericAwareEq compares two values for equality, using float64 when both are numeric.
+func numericAwareEq(a, b any) bool {
+	fa, aIsNum := toFloat64(a)
+	fb, bIsNum := toFloat64(b)
+	if aIsNum && bIsNum {
+		return fa == fb
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// evalCondition evaluates a structured condition against a map of resolved node inputs.
+//
+// Supported operators: eq, ne, gt, gte, lt, lte, contains, in, exists,
+// length_eq, length_ne, length_gt, length_gte, length_lt, length_lte.
+func evalCondition(c *Condition, resolved map[string]any) (bool, error) {
+	if c == nil {
+		return false, fmt.Errorf("evalCondition: nil condition")
+	}
+	if c.Field == "" {
+		return false, fmt.Errorf("evalCondition: field name is empty")
 	}
 
-	// Pattern: $.<field> == '<string>'
-	if strings.HasPrefix(when, "$.") && strings.Contains(when, " == '") {
-		withoutDollar := strings.TrimPrefix(when, "$.")
-		eqIdx := strings.Index(withoutDollar, " == '")
-		if eqIdx < 0 {
-			return false, fmt.Errorf("evalWhen: malformed condition %q", when)
+	fieldVal, fieldPresent := resolved[c.Field]
+
+	switch c.Op {
+	case "exists":
+		if len(c.Value) > 0 && string(c.Value) != "null" {
+			return false, fmt.Errorf("exists: unexpected value for field %q", c.Field)
 		}
-		field := withoutDollar[:eqIdx]
-		rest := withoutDollar[eqIdx+len(" == '"):]
-		if !strings.HasSuffix(rest, "'") {
-			return false, fmt.Errorf("evalWhen: condition %q: missing closing single quote", when)
+		return fieldPresent && fieldVal != nil, nil
+
+	case "eq", "ne":
+		var want any
+		if err := json.Unmarshal(c.Value, &want); err != nil {
+			return false, fmt.Errorf("evalCondition: invalid value for %s: %w", c.Op, err)
 		}
-		expected := rest[:len(rest)-1]
-		val, ok := resolved[field]
+		// null: field absent or nil both count as null
+		if want == nil {
+			isNull := !fieldPresent || fieldVal == nil
+			if c.Op == "eq" {
+				return isNull, nil
+			}
+			return !isNull, nil
+		}
+		if !fieldPresent {
+			return false, fmt.Errorf("evalCondition: field %q not found", c.Field)
+		}
+		eq := numericAwareEq(fieldVal, want)
+		if c.Op == "eq" {
+			return eq, nil
+		}
+		return !eq, nil
+
+	case "gt", "gte", "lt", "lte":
+		if !fieldPresent {
+			return false, fmt.Errorf("evalCondition: field %q not found", c.Field)
+		}
+		fieldF, ok := toFloat64(fieldVal)
 		if !ok {
-			return false, fmt.Errorf("evalWhen: field %q not found in resolved inputs", field)
+			return false, fmt.Errorf("evalCondition: field %q is not numeric", c.Field)
 		}
-		s, ok := val.(string)
-		if !ok {
-			return false, fmt.Errorf("evalWhen: field %q is not a string", field)
+		var wantF float64
+		if err := json.Unmarshal(c.Value, &wantF); err != nil {
+			return false, fmt.Errorf("evalCondition: invalid numeric value for %s: %w", c.Op, err)
 		}
-		return s == expected, nil
+		switch c.Op {
+		case "gt":
+			return fieldF > wantF, nil
+		case "gte":
+			return fieldF >= wantF, nil
+		case "lt":
+			return fieldF < wantF, nil
+		default: // lte
+			return fieldF <= wantF, nil
+		}
+
+	case "contains":
+		if !fieldPresent {
+			return false, fmt.Errorf("evalCondition: field %q not found", c.Field)
+		}
+		var want any
+		if err := json.Unmarshal(c.Value, &want); err != nil {
+			return false, fmt.Errorf("evalCondition: invalid value for contains: %w", err)
+		}
+		switch fv := fieldVal.(type) {
+		case string:
+			s, ok := want.(string)
+			if !ok {
+				return false, fmt.Errorf("contains: field %q is a string but value is not", c.Field)
+			}
+			return strings.Contains(fv, s), nil
+		case []any:
+			for _, elem := range fv {
+				if numericAwareEq(elem, want) {
+					return true, nil
+				}
+			}
+			return false, nil
+		default:
+			return false, fmt.Errorf("contains: field %q is neither string nor array, got %T", c.Field, fieldVal)
+		}
+
+	case "in":
+		if !fieldPresent {
+			return false, fmt.Errorf("evalCondition: field %q not found", c.Field)
+		}
+		var list []any
+		if err := json.Unmarshal(c.Value, &list); err != nil {
+			return false, fmt.Errorf("in: value must be a JSON array: %w", err)
+		}
+		for _, elem := range list {
+			if numericAwareEq(fieldVal, elem) {
+				return true, nil
+			}
+		}
+		return false, nil
+
+	case "length_eq", "length_ne", "length_gt", "length_gte", "length_lt", "length_lte":
+		if !fieldPresent {
+			return false, fmt.Errorf("evalCondition: field %q not found", c.Field)
+		}
+		if fieldVal == nil {
+			return false, fmt.Errorf("length_*: field %q is nil", c.Field)
+		}
+		var wantF float64
+		if err := json.Unmarshal(c.Value, &wantF); err != nil {
+			return false, fmt.Errorf("evalCondition: invalid numeric value for %s: %w", c.Op, err)
+		}
+		n := int(wantF)
+		var length int
+		switch fv := fieldVal.(type) {
+		case []any:
+			length = len(fv)
+		case string:
+			length = len(fv)
+		default:
+			return false, fmt.Errorf("length_*: field %q is neither array nor string, got %T", c.Field, fieldVal)
+		}
+		switch c.Op {
+		case "length_eq":
+			return length == n, nil
+		case "length_ne":
+			return length != n, nil
+		case "length_gt":
+			return length > n, nil
+		case "length_gte":
+			return length >= n, nil
+		case "length_lt":
+			return length < n, nil
+		default: // length_lte
+			return length <= n, nil
+		}
 	}
 
-	return false, fmt.Errorf("evalWhen: unsupported condition %q", when)
+	return false, fmt.Errorf("evalCondition: unknown operator %q", c.Op)
 }
