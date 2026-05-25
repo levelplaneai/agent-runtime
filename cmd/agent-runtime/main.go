@@ -20,6 +20,9 @@ import (
 	"github.com/levelplaneai/agent-runtime/internal/runtime"
 )
 
+// version is set at build time via -ldflags="-X main.version=v0.1.0".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -31,6 +34,8 @@ func main() {
 		cmdValidate(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "version", "--version", "-v":
+		fmt.Println(version)
 	default:
 		usage()
 		os.Exit(1)
@@ -41,6 +46,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  agent-runtime validate <bundle-path>")
 	fmt.Fprintln(os.Stderr, "  agent-runtime run <bundle-path> [flags]")
+	fmt.Fprintln(os.Stderr, "  agent-runtime version")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --input key=value                               pass a flow input (repeatable)")

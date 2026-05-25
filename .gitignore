@@ -1,8 +1,9 @@
 # secrets
 .env
 
-# compiled binary (root only)
+# compiled binaries
 /agent-runtime
+/bin/
 
 # SDK run data
 .agent-runtime/
