@@ -33,6 +33,8 @@ func ExecutePrompt(
 	execCtx *ExecutionContext,
 	provider LLMProvider,
 	reg *Registry,
+	seedLoopState *NodeSnapshot,
+	onLoopCheckpoint func(NodeSnapshot) error,
 ) (map[string]any, error) {
 	resolved, err := resolveNodeInputs(node, execCtx)
 	if err != nil {
@@ -99,8 +101,13 @@ func ExecutePrompt(
 	// --- agentic tool-use loop ---
 	req.Tools = toolDefs
 	messages := req.Messages
+	startIter := 0
+	if seedLoopState != nil {
+		messages = seedLoopState.Messages
+		startIter = seedLoopState.Iteration
+	}
 
-	for iter := 0; iter < maxIter; iter++ {
+	for iter := startIter; iter < maxIter; iter++ {
 		t.Emit(TraceEvent{Event: "agent_iteration", Node: nodeName, Attempt: iter + 1})
 		req.Messages = messages
 
@@ -200,6 +207,13 @@ func ExecutePrompt(
 
 		// Append user turn carrying all tool_results.
 		messages = append(messages, Message{Role: "user", Blocks: resultBlocks})
+
+		if onLoopCheckpoint != nil {
+			ns := NodeSnapshot{NodeName: nodeName, NodeType: "prompt", Messages: messages, Iteration: iter + 1}
+			if err := onLoopCheckpoint(ns); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("prompt node: agentic loop reached max_tool_iterations (%d)", maxIter)

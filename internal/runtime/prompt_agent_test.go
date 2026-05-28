@@ -92,7 +92,7 @@ func TestAgenticLoop_OneRound(t *testing.T) {
 		},
 	}}
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestAgenticLoop_MultiRound(t *testing.T) {
 		{Content: "final answer", StopReason: "end_turn"},
 	}}
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestAgenticLoop_MaxIterationsExceeded(t *testing.T) {
 		{ToolCalls: []ToolCall{{ID: "tc2", Name: "echo__v1", Input: json.RawMessage(`{}`)}}, StopReason: "tool_use"},
 	}}
 
-	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when max iterations exceeded, got nil")
 	}
@@ -184,7 +184,7 @@ func TestAgenticLoop_ToolErrorFedBack(t *testing.T) {
 		{Content: "I understand the tool failed", StopReason: "end_turn"},
 	}}
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestAgenticLoop_HallucinatedToolName(t *testing.T) {
 		{Content: "I got an error for the unknown tool", StopReason: "end_turn"},
 	}}
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestAgenticLoop_ToolsAndOutputSchema(t *testing.T) {
 	node := makeNode(t, nodeJSON)
 	provider := &scriptedProvider{t: t, responses: nil}
 
-	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when tools and output_schema both set")
 	}
@@ -277,7 +277,7 @@ func TestAgenticLoop_NoTools_NilReg(t *testing.T) {
 	}}
 	execCtx := NewExecutionContext(map[string]any{})
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestBuiltinTool_ProviderMismatch(t *testing.T) {
 	execCtx := NewExecutionContext(map[string]any{})
 	provider := &scriptedProvider{t: t, responses: nil}
 
-	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil)
+	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for provider/model mismatch")
 	}
@@ -430,7 +430,7 @@ func TestAgenticLoop_ImageToolResult(t *testing.T) {
 		{Content: "I can see the desktop", StopReason: "end_turn"},
 	}}
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestAgenticLoop_ImageOnlyToolResult(t *testing.T) {
 		{Content: "rendered", StopReason: "end_turn"},
 	}}
 
-	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg)
+	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

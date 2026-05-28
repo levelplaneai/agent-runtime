@@ -935,6 +935,212 @@ func TestSnapshotRoundTrip_FileValue(t *testing.T) {
 	}
 }
 
+func TestSnapshotRoundTrip_NodeSnapshot(t *testing.T) {
+	// Verify that a Snapshot with ActiveNode.Messages (including tool_use/tool_result blocks
+	// with binary data and json.RawMessage fields) survives a JSON marshal/unmarshal cycle.
+	snap := Snapshot{
+		RunID:         "run-abc",
+		BundleVersion: "1.0.0",
+		FlowRef:       "main@v1",
+		Visited:       []string{},
+		Frontier:      []string{"agent"},
+		ActiveNode: &NodeSnapshot{
+			NodeName:  "agent",
+			NodeType:  "prompt",
+			Iteration: 2,
+			Messages: []Message{
+				{Role: "user", Content: "do something"},
+				{Role: "assistant", Blocks: []ContentBlock{
+					{Type: "tool_use", ToolUseID: "tc1", ToolName: "echo__v1", ToolInput: json.RawMessage(`{"x":"hello"}`)},
+				}},
+				{Role: "user", Blocks: []ContentBlock{
+					{Type: "tool_result", ToolUseID: "tc1", ToolName: "echo__v1",
+						SubBlocks: []ContentBlock{
+							{Type: "image", Data: []byte{0x89, 0x50, 0x4e, 0x47}, MediaType: "image/png"},
+						},
+					},
+				}},
+			},
+		},
+	}
+
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Snapshot
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.ActiveNode == nil {
+		t.Fatal("ActiveNode nil after round-trip")
+	}
+	if got.ActiveNode.Iteration != 2 {
+		t.Errorf("Iteration: got %d, want 2", got.ActiveNode.Iteration)
+	}
+	if len(got.ActiveNode.Messages) != 3 {
+		t.Fatalf("Messages: got %d, want 3", len(got.ActiveNode.Messages))
+	}
+	assistantBlocks := got.ActiveNode.Messages[1].Blocks
+	if len(assistantBlocks) == 0 || assistantBlocks[0].ToolName != "echo__v1" {
+		t.Errorf("assistant tool_use block not preserved: %+v", assistantBlocks)
+	}
+	if string(assistantBlocks[0].ToolInput) != `{"x":"hello"}` {
+		t.Errorf("ToolInput: got %q, want {\"x\":\"hello\"}", string(assistantBlocks[0].ToolInput))
+	}
+	userBlocks := got.ActiveNode.Messages[2].Blocks
+	if len(userBlocks) == 0 || len(userBlocks[0].SubBlocks) == 0 {
+		t.Errorf("tool_result sub-blocks not preserved: %+v", userBlocks)
+	} else {
+		imgBlock := userBlocks[0].SubBlocks[0]
+		if string(imgBlock.Data) != string([]byte{0x89, 0x50, 0x4e, 0x47}) {
+			t.Errorf("image Data: got %v, want PNG header bytes", imgBlock.Data)
+		}
+		if imgBlock.MediaType != "image/png" {
+			t.Errorf("MediaType: got %q, want image/png", imgBlock.MediaType)
+		}
+	}
+}
+
+func makeAgentBundle(t *testing.T, toolRef string, maxIter int) *bundle.Bundle {
+	t.Helper()
+	toolsJSON, _ := json.Marshal([]string{toolRef})
+	maxIterJSON, _ := json.Marshal(maxIter)
+	agentNode := bundle.Node{
+		Type: "prompt",
+		Config: map[string]json.RawMessage{
+			"model":                json.RawMessage(`"test/model"`),
+			"user":                 json.RawMessage(`"do something"`),
+			"tools":                toolsJSON,
+			"max_tool_iterations":  maxIterJSON,
+		},
+	}
+	return &bundle.Bundle{
+		Path: t.TempDir(),
+		Manifest: bundle.Manifest{
+			Entry:         "main@v1",
+			BundleVersion: "1.0.0",
+		},
+		Flows: map[string]map[string]bundle.Flow{
+			"main": {"v1": bundle.Flow{
+				Entry: "agent",
+				Nodes: map[string]string{"agent": "agent_node@v1"},
+				Outputs: map[string]bundle.FlowOutputBinding{
+					"result": {From: "$.agent.output"},
+				},
+			}},
+		},
+		Nodes: map[string]map[string]bundle.Node{
+			"agent_node": {"v1": agentNode},
+		},
+		Tools: map[string]map[string]bundle.ToolSignature{},
+	}
+}
+
+func TestRunFlow_MidLoopCheckpoint(t *testing.T) {
+	reg := makeTestRegistry(t, "echo@v1")
+	b := makeAgentBundle(t, "echo@v1", 5)
+
+	provider := &scriptedProvider{t: t, responses: []CompletionResponse{
+		{ToolCalls: []ToolCall{{ID: "tc1", Name: "echo__v1", Input: json.RawMessage(`{"x":"a"}`)}}},
+		{ToolCalls: []ToolCall{{ID: "tc2", Name: "echo__v1", Input: json.RawMessage(`{"x":"b"}`)}}},
+		{Content: `{"result":"done"}`},
+	}}
+
+	var snaps []Snapshot
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, provider, &RunFlowOptions{
+		OnCheckpoint: func(s Snapshot) error {
+			snaps = append(snaps, s)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+
+	// 2 mid-loop checkpoints (after iter 0 and iter 1) + 1 node-boundary checkpoint
+	if len(snaps) != 3 {
+		t.Fatalf("expected 3 checkpoints, got %d", len(snaps))
+	}
+
+	// First two are mid-loop (ActiveNode != nil)
+	for i := 0; i < 2; i++ {
+		if snaps[i].ActiveNode == nil {
+			t.Errorf("snap[%d]: expected ActiveNode to be non-nil (mid-loop)", i)
+			continue
+		}
+		if snaps[i].ActiveNode.NodeName != "agent" {
+			t.Errorf("snap[%d].ActiveNode.NodeName: got %q, want \"agent\"", i, snaps[i].ActiveNode.NodeName)
+		}
+		if snaps[i].ActiveNode.Iteration != i+1 {
+			t.Errorf("snap[%d].ActiveNode.Iteration: got %d, want %d", i, snaps[i].ActiveNode.Iteration, i+1)
+		}
+		// Frontier re-queues the active node; Visited does not include it
+		if !sliceEq(snaps[i].Frontier, []string{"agent"}) {
+			t.Errorf("snap[%d].Frontier: got %v, want [agent]", i, snaps[i].Frontier)
+		}
+		if len(snaps[i].Visited) != 0 {
+			t.Errorf("snap[%d].Visited: got %v, want []", i, snaps[i].Visited)
+		}
+	}
+
+	// Third is node-boundary (ActiveNode == nil, node complete)
+	if snaps[2].ActiveNode != nil {
+		t.Errorf("snap[2]: expected ActiveNode nil (node-boundary checkpoint)")
+	}
+	if !sliceEq(snaps[2].Visited, []string{"agent"}) {
+		t.Errorf("snap[2].Visited: got %v, want [agent]", snaps[2].Visited)
+	}
+}
+
+func TestRunFlowResume_MidLoop(t *testing.T) {
+	reg := makeTestRegistry(t, "echo@v1")
+	b := makeAgentBundle(t, "echo@v1", 5)
+
+	// Phase 1: run until after the first tool round; capture mid-loop snapshot.
+	firstProvider := &scriptedProvider{t: t, responses: []CompletionResponse{
+		{ToolCalls: []ToolCall{{ID: "tc1", Name: "echo__v1", Input: json.RawMessage(`{"x":"first"}`)}}},
+	}}
+	var midSnap Snapshot
+	// We only need one checkpoint (the mid-loop one after iter 0).
+	checkCount := 0
+	_, _ = RunFlow(context.Background(), b, map[string]any{}, reg, firstProvider, &RunFlowOptions{
+		OnCheckpoint: func(s Snapshot) error {
+			checkCount++
+			if checkCount == 1 {
+				midSnap = s
+				return fmt.Errorf("stop after first checkpoint")
+			}
+			return nil
+		},
+	})
+	if midSnap.ActiveNode == nil {
+		t.Fatal("expected mid-loop snapshot with ActiveNode set")
+	}
+	if midSnap.ActiveNode.Iteration != 1 {
+		t.Fatalf("expected Iteration=1, got %d", midSnap.ActiveNode.Iteration)
+	}
+
+	// Phase 2: resume from mid-loop snapshot.
+	// The resume provider only needs to handle iter=1 onward (NOT the first tool call).
+	resumeProvider := &scriptedProvider{t: t, responses: []CompletionResponse{
+		{Content: `{"result":"resumed"}`},
+	}}
+	out, err := RunFlowResume(context.Background(), b, midSnap, reg, resumeProvider, nil)
+	if err != nil {
+		t.Fatalf("RunFlowResume error: %v", err)
+	}
+	// Resume provider should have been called exactly once (final answer only).
+	if resumeProvider.idx != 1 {
+		t.Errorf("resume provider called %d times, want 1 (first iteration must not re-run)", resumeProvider.idx)
+	}
+	// out["result"] is the agent node's output map (bound via $.agent.output)
+	nodeOut, ok := out["result"].(map[string]any)
+	if !ok || nodeOut["result"] != "resumed" {
+		t.Errorf("output: got %v, want result.result=resumed", out)
+	}
+}
+
 // --- helpers ---
 
 func sliceEq(a, b []string) bool {

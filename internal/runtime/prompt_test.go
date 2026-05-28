@@ -191,7 +191,7 @@ func TestExecutePrompt_JSONOutput(t *testing.T) {
 	provider := &stubProvider{response: CompletionResponse{Content: `{"text":"hello"}`}}
 	execCtx := NewExecutionContext(map[string]any{})
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestExecutePrompt_PlainTextOutput(t *testing.T) {
 	provider := &stubProvider{response: CompletionResponse{Content: "hello world"}}
 	execCtx := NewExecutionContext(map[string]any{})
 
-	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil)
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

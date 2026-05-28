@@ -162,6 +162,9 @@ type runner struct {
 	tracer  *Tracer
 	runID   string // stamped on flow/node trace events; carries through on resume
 	depth   int    // subflow nesting depth; capped at maxSubflowDepth
+
+	pendingLoopSeed   *NodeSnapshot            // set by RunFlowResume when snap.ActiveNode != nil
+	midLoopCheckpoint func(NodeSnapshot) error // set by runFrontier before each prompt node execution
 }
 
 const maxSubflowDepth = 32
@@ -192,7 +195,12 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 		case "tool_call":
 			return ExecuteToolCall(ctx, node, r.execCtx, r.reg)
 		case "prompt":
-			return ExecutePrompt(ctx, node, nodeDir, r.execCtx, r.provider, r.reg)
+			seed := (*NodeSnapshot)(nil)
+			if r.pendingLoopSeed != nil && r.pendingLoopSeed.NodeName == localName {
+				seed = r.pendingLoopSeed
+				r.pendingLoopSeed = nil
+			}
+			return ExecutePrompt(ctx, node, nodeDir, r.execCtx, r.provider, r.reg, seed, r.midLoopCheckpoint)
 		case "router":
 			return ExecuteRouter(ctx, localName, node, nodeDir, r.execCtx, r.provider)
 		case "map":
@@ -250,7 +258,37 @@ func (r *runner) runFrontier(ctx context.Context, frontier []string, visited map
 			continue
 		}
 		visited[localName] = true
+
+		r.midLoopCheckpoint = nil
+		if opts != nil && opts.OnCheckpoint != nil {
+			snapVisited := make([]string, 0, len(visited))
+			for k := range visited {
+				if k != localName {
+					snapVisited = append(snapVisited, k)
+				}
+			}
+			sort.Strings(snapVisited)
+			snapFrontier := make([]string, 0, 1+len(frontier))
+			snapFrontier = append(snapFrontier, localName)
+			snapFrontier = append(snapFrontier, frontier...)
+			onCB := opts.OnCheckpoint
+			r.midLoopCheckpoint = func(ns NodeSnapshot) error {
+				snap := Snapshot{
+					RunID:         r.runID,
+					Timestamp:     time.Now(),
+					BundleVersion: r.b.Manifest.BundleVersion,
+					FlowRef:       r.b.Manifest.Entry,
+					Inputs:        marshalAnyMap(r.execCtx.Inputs()),
+					NodeOutputs:   marshalAnyMap(r.execCtx.AllNodeOutputs()),
+					Visited:       snapVisited,
+					Frontier:      snapFrontier,
+					ActiveNode:    &ns,
+				}
+				return onCB(snap)
+			}
+		}
 		_, gotoTarget, err := r.executeNode(ctx, localName)
+		r.midLoopCheckpoint = nil
 		if err != nil {
 			return fmt.Errorf("node %q: %w", localName, err)
 		}
@@ -359,6 +397,10 @@ func RunFlowResume(
 		nextMap:  buildNextMap(flow),
 		tracer:   t,
 		runID:    runID,
+	}
+
+	if snap.ActiveNode != nil {
+		r.pendingLoopSeed = snap.ActiveNode
 	}
 
 	frontier := snap.Frontier

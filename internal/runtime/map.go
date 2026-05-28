@@ -53,6 +53,12 @@ func (r *runner) executeMap(ctx context.Context, localName string, mapNode bundl
 }
 
 func (r *runner) executeMapSequential(ctx context.Context, localName, asName, doName string, items []any) (map[string]any, error) {
+	// Map is atomic w.r.t. mid-loop checkpoints; inner prompt nodes must not inherit
+	// the outer checkpoint closure (which references the map node's frontier/visited).
+	prev := r.midLoopCheckpoint
+	r.midLoopCheckpoint = nil
+	defer func() { r.midLoopCheckpoint = prev }()
+
 	results := make([]any, 0, len(items))
 	for i, item := range items {
 		r.execCtx.SetIterVar(asName, item)
