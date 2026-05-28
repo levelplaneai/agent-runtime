@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -23,6 +24,10 @@ func NewOpenAIProvider(client *openai.Client) *OpenAIProvider {
 }
 
 func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	if len(req.BuiltinTools) > 0 {
+		return CompletionResponse{}, fmt.Errorf("openai: provider-managed built-in tools are not supported in the Chat Completions API")
+	}
+
 	params := openai.ChatCompletionNewParams{
 		Model:     openai.ChatModel(req.Model),
 		MaxTokens: openai.Int(int64(req.MaxTokens)),
@@ -33,22 +38,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		msgs = append(msgs, openai.SystemMessage(req.System))
 	}
 	for _, m := range req.Messages {
-		switch strings.ToLower(m.Role) {
-		case "user":
-			if m.Blocks != nil {
-				parts, err := openaiContentParts(m.Blocks)
-				if err != nil {
-					return CompletionResponse{}, err
-				}
-				msgs = append(msgs, openai.UserMessage(parts))
-			} else {
-				msgs = append(msgs, openai.UserMessage(m.Content))
-			}
-		case "assistant":
-			msgs = append(msgs, openai.AssistantMessage(m.Content))
-		default:
-			return CompletionResponse{}, fmt.Errorf("openai: unknown role %q", m.Role)
+		encoded, err := openaiEncodeMessage(m)
+		if err != nil {
+			return CompletionResponse{}, err
 		}
+		msgs = append(msgs, encoded...)
 	}
 	params.Messages = msgs
 
@@ -68,6 +62,20 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		params.Temperature = openai.Float(*req.Temperature)
 	}
 
+	if len(req.Tools) > 0 {
+		oaiTools := make([]openai.ChatCompletionToolParam, len(req.Tools))
+		for i, td := range req.Tools {
+			oaiTools[i] = openai.ChatCompletionToolParam{
+				Function: shared.FunctionDefinitionParam{
+					Name:        td.Name,
+					Description: openai.String(td.Description),
+					Parameters:  shared.FunctionParameters(td.InputSchema),
+				},
+			}
+		}
+		params.Tools = oaiTools
+	}
+
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return CompletionResponse{}, fmt.Errorf("openai: API call failed: %w", err)
@@ -75,7 +83,104 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	if len(resp.Choices) == 0 {
 		return CompletionResponse{}, fmt.Errorf("openai: no choices in response")
 	}
-	return CompletionResponse{Content: resp.Choices[0].Message.Content}, nil
+
+	choice := resp.Choices[0]
+
+	if choice.FinishReason == "tool_calls" {
+		var toolCalls []ToolCall
+		for _, tc := range choice.Message.ToolCalls {
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: json.RawMessage(tc.Function.Arguments),
+			})
+		}
+		return CompletionResponse{
+			Content:      choice.Message.Content,
+			ToolCalls:    toolCalls,
+			StopReason:   "tool_use",
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		}, nil
+	}
+
+	return CompletionResponse{
+		Content:      choice.Message.Content,
+		StopReason:   "end_turn",
+		InputTokens:  resp.Usage.PromptTokens,
+		OutputTokens: resp.Usage.CompletionTokens,
+	}, nil
+}
+
+// openaiEncodeMessage converts a Message to one or more OpenAI message params.
+// Most messages produce a single param, but a user message with tool_result blocks
+// must be split into one ChatCompletionToolMessageParam per result (OpenAI requirement).
+func openaiEncodeMessage(m Message) ([]openai.ChatCompletionMessageParamUnion, error) {
+	role := strings.ToLower(m.Role)
+
+	switch role {
+	case "user":
+		if m.Blocks != nil {
+			// Tool result blocks require individual tool messages.
+			if hasBlockType(m.Blocks, "tool_result") {
+				var out []openai.ChatCompletionMessageParamUnion
+				for _, b := range m.Blocks {
+					if b.Type == "tool_result" {
+						out = append(out, openai.ToolMessage(b.Text, b.ToolUseID))
+					}
+				}
+				return out, nil
+			}
+			parts, err := openaiContentParts(m.Blocks)
+			if err != nil {
+				return nil, err
+			}
+			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(parts)}, nil
+		}
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.Content)}, nil
+
+	case "assistant":
+		if m.Blocks != nil && hasBlockType(m.Blocks, "tool_use") {
+			// Build an assistant message with tool_calls.
+			var toolCalls []openai.ChatCompletionMessageToolCallParam
+			var textContent string
+			for _, b := range m.Blocks {
+				switch b.Type {
+				case "text":
+					textContent = b.Text
+				case "tool_use":
+					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+						ID: b.ToolUseID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      b.ToolName,
+							Arguments: string(b.ToolInput),
+						},
+					})
+				}
+			}
+			asst := &openai.ChatCompletionAssistantMessageParam{ToolCalls: toolCalls}
+			if textContent != "" {
+				asst.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: openai.String(textContent),
+				}
+			}
+			return []openai.ChatCompletionMessageParamUnion{{OfAssistant: asst}}, nil
+		}
+		return []openai.ChatCompletionMessageParamUnion{openai.AssistantMessage(m.Content)}, nil
+
+	default:
+		return nil, fmt.Errorf("openai: unknown role %q", m.Role)
+	}
+}
+
+// hasBlockType reports whether any block in the slice has the given type.
+func hasBlockType(blocks []ContentBlock, typ string) bool {
+	for _, b := range blocks {
+		if b.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 // openaiContentParts converts ContentBlocks to OpenAI chat content parts.

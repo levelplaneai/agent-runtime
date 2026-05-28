@@ -16,19 +16,23 @@ import (
 //  1. Resolves declared inputs via their "from" bindings.
 //  2. Assembles system + user messages (inline config strings or .prompt files).
 //  3. Renders {{ name }} templates using the resolved inputs.
-//  4. Calls the LLM via the provider (supports Anthropic, OpenAI, Gemini, etc.).
-//  5. If output_schema is declared, structured JSON output is requested.
-//  6. Returns the parsed output map.
+//  4. If config.tools is set, runs an agentic tool-use loop until the LLM gives
+//     a final text answer or max_tool_iterations is reached.
+//  5. Otherwise calls the LLM once (single-shot).
+//  6. If output_schema is declared, structured JSON output is requested.
+//  7. Returns the parsed output map.
 //
 // nodeDir is the absolute path to the node's version directory
 // (e.g. "<bundle>/nodes/extract_items/v3/"). It is used to load
 // system.prompt / user.prompt when they are not inlined in config.
+// reg may be nil when config.tools is absent.
 func ExecutePrompt(
 	ctx context.Context,
 	node bundle.Node,
 	nodeDir string,
 	execCtx *ExecutionContext,
 	provider LLMProvider,
+	reg *Registry,
 ) (map[string]any, error) {
 	resolved, err := resolveNodeInputs(node, execCtx)
 	if err != nil {
@@ -45,25 +49,284 @@ func ExecutePrompt(
 		return nil, fmt.Errorf("prompt node: %w", err)
 	}
 
-	t := tracerFrom(ctx)
-	t.Emit(TraceEvent{Event: "llm_request", Node: execCtx.CurrentNode(), Model: req.Model})
-	reqStart := time.Now()
-
-	resp, err := provider.Complete(ctx, req)
+	toolDefs, builtins, refMap, maxIter, err := parseToolConfig(node.Config, reg)
 	if err != nil {
 		return nil, fmt.Errorf("prompt node: %w", err)
 	}
 
-	t.Emit(TraceEvent{
-		Event:        "llm_response",
-		Node:         execCtx.CurrentNode(),
-		Model:        req.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
-		DurationMS:   time.Since(reqStart).Milliseconds(),
-	})
+	if (len(toolDefs) > 0 || len(builtins) > 0) && len(node.OutputSchema) > 0 {
+		return nil, fmt.Errorf("prompt node: tools and output_schema are mutually exclusive")
+	}
 
-	return extractOutput(resp)
+	// Cross-provider validation: built-in tool prefix must match the model's provider.
+	modelPrefix := strings.SplitN(req.Model, "/", 2)[0]
+	for _, bt := range builtins {
+		toolPrefix := strings.SplitN(bt.Name, ":", 2)[0]
+		if toolPrefix != modelPrefix {
+			return nil, fmt.Errorf("prompt node: %s is a %s built-in tool but model is %s", bt.Name, toolPrefix, req.Model)
+		}
+	}
+
+	req.BuiltinTools = builtins
+
+	t := tracerFrom(ctx)
+	nodeName := execCtx.CurrentNode()
+
+	if len(toolDefs) == 0 {
+		// --- single-shot path (existing behaviour) ---
+		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model})
+		reqStart := time.Now()
+
+		resp, err := provider.Complete(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("prompt node: %w", err)
+		}
+
+		t.Emit(TraceEvent{
+			Event:        "llm_response",
+			Node:         nodeName,
+			Model:        req.Model,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
+			DurationMS:   time.Since(reqStart).Milliseconds(),
+		})
+		for _, name := range resp.BuiltinToolsUsed {
+			t.Emit(TraceEvent{Event: "builtin_tool_used", Node: nodeName, Tool: name})
+		}
+		return extractOutput(resp)
+	}
+
+	// --- agentic tool-use loop ---
+	req.Tools = toolDefs
+	messages := req.Messages
+
+	for iter := 0; iter < maxIter; iter++ {
+		t.Emit(TraceEvent{Event: "agent_iteration", Node: nodeName, Attempt: iter + 1})
+		req.Messages = messages
+
+		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model, Attempt: iter + 1})
+		iterStart := time.Now()
+
+		resp, err := provider.Complete(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("prompt node agentic loop: %w", err)
+		}
+
+		t.Emit(TraceEvent{
+			Event:        "llm_response",
+			Node:         nodeName,
+			Model:        req.Model,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
+			DurationMS:   time.Since(iterStart).Milliseconds(),
+			Attempt:      iter + 1,
+		})
+		for _, name := range resp.BuiltinToolsUsed {
+			t.Emit(TraceEvent{Event: "builtin_tool_used", Node: nodeName, Tool: name, Attempt: iter + 1})
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			return extractOutput(resp)
+		}
+
+		// Append assistant turn with tool_use blocks (and optional text prefix).
+		messages = append(messages, buildAssistantTurnMessage(resp))
+
+		// Execute each tool call and collect tool_result blocks.
+		resultBlocks := make([]ContentBlock, 0, len(resp.ToolCalls))
+		for _, tc := range resp.ToolCalls {
+			ref, ok := refMap[tc.Name]
+			if !ok {
+				resultBlocks = append(resultBlocks, ContentBlock{
+					Type:      "tool_result",
+					ToolUseID: tc.ID,
+					ToolName:  tc.Name,
+					Text:      fmt.Sprintf("unknown tool %q", tc.Name),
+					IsError:   true,
+				})
+				continue
+			}
+			tool, _, _ := reg.Lookup(ref)
+
+			var args map[string]any
+			_ = json.Unmarshal(tc.Input, &args)
+
+			t.Emit(TraceEvent{
+				Event:   "tool_start",
+				Node:    nodeName,
+				Tool:    ref,
+				Args:    args,
+				Attempt: iter + 1,
+			})
+			toolStart := time.Now()
+			output, toolErr := tool.Call(ctx, args)
+			toolDur := time.Since(toolStart).Milliseconds()
+
+			if toolErr != nil {
+				t.Emit(TraceEvent{
+					Event:      "tool_error",
+					Node:       nodeName,
+					Tool:       ref,
+					Error:      toolErr.Error(),
+					DurationMS: toolDur,
+					Attempt:    iter + 1,
+				})
+				resultBlocks = append(resultBlocks, ContentBlock{
+					Type:      "tool_result",
+					ToolUseID: tc.ID,
+					ToolName:  tc.Name,
+					Text:      toolErr.Error(),
+					IsError:   true,
+				})
+			} else {
+				t.Emit(TraceEvent{
+					Event:      "tool_done",
+					Node:       nodeName,
+					Tool:       ref,
+					Output:     sanitizeOutputForTrace(output),
+					DurationMS: toolDur,
+					Attempt:    iter + 1,
+				})
+				textPart, subBlocks := buildToolResultContent(output)
+				cb := ContentBlock{Type: "tool_result", ToolUseID: tc.ID, ToolName: tc.Name}
+				if len(subBlocks) == 0 {
+					cb.Text = textPart
+				} else {
+					cb.SubBlocks = subBlocks
+				}
+				resultBlocks = append(resultBlocks, cb)
+			}
+		}
+
+		// Append user turn carrying all tool_results.
+		messages = append(messages, Message{Role: "user", Blocks: resultBlocks})
+	}
+
+	return nil, fmt.Errorf("prompt node: agentic loop reached max_tool_iterations (%d)", maxIter)
+}
+
+// buildAssistantTurnMessage builds the assistant Message to append after tool calls.
+// It includes an optional text block (if the LLM returned preamble text) followed
+// by one tool_use block per requested call.
+func buildAssistantTurnMessage(resp CompletionResponse) Message {
+	var blocks []ContentBlock
+	if resp.Content != "" {
+		blocks = append(blocks, ContentBlock{Type: "text", Text: resp.Content})
+	}
+	for _, tc := range resp.ToolCalls {
+		blocks = append(blocks, ContentBlock{
+			Type:      "tool_use",
+			ToolUseID: tc.ID,
+			ToolName:  tc.Name,
+			ToolInput: tc.Input,
+		})
+	}
+	return Message{Role: "assistant", Blocks: blocks}
+}
+
+// knownBuiltinTools lists provider-managed tool names accepted in config.tools.
+// The key is the full "provider:name" string.
+var knownBuiltinTools = map[string]bool{
+	"anthropic:web_search":    true,
+	"anthropic:code_execution": true,
+	"anthropic:bash":           true,
+	"anthropic:text_editor":    true,
+	"gemini:code_execution":    true,
+	"gemini:google_search":     true,
+	"gemini:url_context":       true,
+}
+
+// parseToolConfig parses config.tools and config.max_tool_iterations.
+// Returns nil defs/builtins/refMap when config.tools is absent (caller uses single-shot path).
+// reg may be nil when no registry tools are listed in config.tools.
+// Registry refs use "name@version" format; built-in tool refs use "provider:toolname" format.
+func parseToolConfig(
+	config map[string]json.RawMessage,
+	reg *Registry,
+) (defs []ToolDefinition, builtins []BuiltinTool, refMap map[string]string, maxIter int, err error) {
+	raw, ok := config["tools"]
+	if !ok {
+		return nil, nil, nil, 0, nil
+	}
+
+	var refs []string
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		return nil, nil, nil, 0, fmt.Errorf("config.tools must be an array of strings: %w", err)
+	}
+
+	maxIter = 10
+	if rawMax, ok := config["max_tool_iterations"]; ok {
+		var n int
+		if err := json.Unmarshal(rawMax, &n); err != nil {
+			return nil, nil, nil, 0, fmt.Errorf("config.max_tool_iterations must be an integer: %w", err)
+		}
+		if n <= 0 {
+			return nil, nil, nil, 0, fmt.Errorf("config.max_tool_iterations must be a positive integer, got %d", n)
+		}
+		maxIter = n
+	}
+
+	defs = make([]ToolDefinition, 0, len(refs))
+	refMap = make(map[string]string, len(refs))
+
+	for _, ref := range refs {
+		if strings.Contains(ref, ":") {
+			// Provider-managed built-in tool.
+			prefix := strings.SplitN(ref, ":", 2)[0]
+			if prefix == "openai" {
+				return nil, nil, nil, 0, fmt.Errorf("tool %q: OpenAI does not support provider-managed built-in tools in the Chat Completions API", ref)
+			}
+			if !knownBuiltinTools[ref] {
+				return nil, nil, nil, 0, fmt.Errorf("tool %q: unknown built-in tool (known: anthropic:web_search, anthropic:code_execution, anthropic:bash, anthropic:text_editor, gemini:code_execution, gemini:google_search, gemini:url_context)", ref)
+			}
+			builtins = append(builtins, BuiltinTool{Name: ref})
+			continue
+		}
+
+		// Registry ref ("name@version").
+		if reg == nil {
+			return nil, nil, nil, 0, fmt.Errorf("tool %q requires a registry but none was provided", ref)
+		}
+		_, sig, ok := reg.Lookup(ref)
+		if !ok {
+			return nil, nil, nil, 0, fmt.Errorf("tool %q not found in registry", ref)
+		}
+
+		sanitized := sanitizeToolName(ref)
+
+		var inputSchema map[string]any
+		if len(sig.InputSchema) > 0 {
+			if err := json.Unmarshal(sig.InputSchema, &inputSchema); err != nil {
+				return nil, nil, nil, 0, fmt.Errorf("tool %q: invalid input_schema: %w", ref, err)
+			}
+		}
+
+		defs = append(defs, ToolDefinition{
+			Name:        sanitized,
+			Description: sig.Description,
+			InputSchema: inputSchema,
+		})
+		if existing, exists := refMap[sanitized]; exists {
+			return nil, nil, nil, 0, fmt.Errorf("tool name collision: %q and %q both sanitize to %q", existing, ref, sanitized)
+		}
+		refMap[sanitized] = ref
+	}
+
+	return defs, builtins, refMap, maxIter, nil
+}
+
+// sanitizeToolName converts a tool ref (e.g. "search@v1") to a name that is safe
+// for LLM tool name fields: replaces "@" with "__" and any remaining characters
+// outside [a-zA-Z0-9_-] with "_".
+func sanitizeToolName(ref string) string {
+	s := strings.ReplaceAll(ref, "@", "__")
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, s)
 }
 
 // buildCompletionRequest assembles the provider-agnostic CompletionRequest for a prompt node.
@@ -154,25 +417,76 @@ func buildMessages(
 	return []Message{{Role: "user", Blocks: blocks}}, nil
 }
 
-// collectFileBlocks extracts FileValue inputs and returns them as ContentBlocks.
+// collectFileBlocks extracts FileValue and ToolImageOutput inputs and returns them as ContentBlocks.
 func collectFileBlocks(inputs map[string]any) []ContentBlock {
 	var blocks []ContentBlock
 	for _, v := range inputs {
-		fv, ok := v.(FileValue)
-		if !ok {
-			continue
+		switch tv := v.(type) {
+		case FileValue:
+			kind := "document"
+			if strings.HasPrefix(tv.MediaType, "image/") {
+				kind = "image"
+			}
+			blocks = append(blocks, ContentBlock{
+				Type:      kind,
+				Data:      tv.Data,
+				MediaType: tv.MediaType,
+			})
+		case ToolImageOutput:
+			blocks = append(blocks, ContentBlock{
+				Type:      "image",
+				Data:      tv.Data,
+				MediaType: tv.MediaType,
+			})
 		}
-		kind := "document"
-		if strings.HasPrefix(fv.MediaType, "image/") {
-			kind = "image"
-		}
-		blocks = append(blocks, ContentBlock{
-			Type:      kind,
-			Data:      fv.Data,
-			MediaType: fv.MediaType,
-		})
 	}
 	return blocks
+}
+
+// buildToolResultContent splits a tool output map into a text part (JSON of non-image
+// fields) and image sub-blocks. When there are no images the caller should use the
+// text part directly on ContentBlock.Text; when there are images the caller should
+// populate ContentBlock.SubBlocks with the returned slice.
+func buildToolResultContent(output map[string]any) (textPart string, subBlocks []ContentBlock) {
+	remaining := make(map[string]any, len(output))
+	for k, v := range output {
+		if img, ok := v.(ToolImageOutput); ok {
+			subBlocks = append(subBlocks, ContentBlock{
+				Type:      "image",
+				Data:      img.Data,
+				MediaType: img.MediaType,
+			})
+		} else {
+			remaining[k] = v
+		}
+	}
+	if len(subBlocks) == 0 {
+		b, _ := json.Marshal(output)
+		return string(b), nil
+	}
+	// Build sub-blocks: text first (if there are non-image fields), then images.
+	if len(remaining) > 0 {
+		b, _ := json.Marshal(remaining)
+		text := string(b)
+		if text != "{}" {
+			subBlocks = append([]ContentBlock{{Type: "text", Text: text}}, subBlocks...)
+		}
+	}
+	return "", subBlocks
+}
+
+// sanitizeOutputForTrace replaces ToolImageOutput values with a compact summary
+// so trace files don't contain raw image bytes.
+func sanitizeOutputForTrace(output map[string]any) map[string]any {
+	result := make(map[string]any, len(output))
+	for k, v := range output {
+		if img, ok := v.(ToolImageOutput); ok {
+			result[k] = map[string]any{"type": "image", "mediaType": img.MediaType, "size": len(img.Data)}
+		} else {
+			result[k] = v
+		}
+	}
+	return result
 }
 
 // buildMultiTurnMessages parses a config.messages JSON array and renders templates.

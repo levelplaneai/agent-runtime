@@ -1,0 +1,10 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "gemini_builtin",
+  "description": "Tests Gemini built-in code_execution tool",
+  "entry": "main@v1",
+  "tools_required": [
+    "gemini:code_execution"
+  ]
+}

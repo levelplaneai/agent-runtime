@@ -1,0 +1,14 @@
+{
+  "description": "Ask a temperature question and get an answer via tool call",
+  "inputs": {
+    "city": { "type": "string" }
+  },
+  "outputs": {
+    "answer": { "from": "$.assistant.output" }
+  },
+  "entry": "assistant",
+  "nodes": {
+    "assistant": "assistant@v1"
+  },
+  "edges": []
+}

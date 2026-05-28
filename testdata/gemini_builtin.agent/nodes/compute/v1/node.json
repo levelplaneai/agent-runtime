@@ -1,0 +1,14 @@
+{
+  "type": "prompt",
+  "description": "Solve a computational problem by executing Python code",
+  "inputs": {
+    "problem": { "from": "$.inputs.problem" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-flash",
+    "system": "You are a computational assistant. Use Python code execution to solve problems precisely. Show the result clearly.",
+    "user": "{{ problem }}",
+    "tools": ["gemini:code_execution"],
+    "max_tool_iterations": 3
+  }
+}

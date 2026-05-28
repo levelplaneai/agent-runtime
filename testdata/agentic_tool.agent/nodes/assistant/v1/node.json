@@ -1,0 +1,14 @@
+{
+  "type": "prompt",
+  "description": "Answer a temperature question by calling the get_temperature tool",
+  "inputs": {
+    "city": { "from": "$.inputs.city" }
+  },
+  "config": {
+    "model": "anthropic/claude-sonnet-4-6",
+    "system": "You are a weather assistant. You MUST use the get_temperature tool to retrieve temperature data. Never guess or invent values.",
+    "user": "What is the current temperature in {{ city }}? Use the get_temperature tool.",
+    "tools": ["get_temperature@v1"],
+    "max_tool_iterations": 3
+  }
+}

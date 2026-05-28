@@ -1,0 +1,14 @@
+{
+  "description": "Solve a computational problem using Python code execution",
+  "inputs": {
+    "problem": { "type": "string" }
+  },
+  "outputs": {
+    "answer": { "from": "$.compute.output" }
+  },
+  "entry": "compute",
+  "nodes": {
+    "compute": "compute@v1"
+  },
+  "edges": []
+}

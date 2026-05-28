@@ -103,10 +103,32 @@ func (t *Tracer) writeHuman(e TraceEvent) {
 	case "llm_response":
 		fmt.Fprintf(w, "[LLM]   ←       %-24s model=%s in=%d out=%d duration=%dms\n",
 			e.Node, e.Model, e.InputTokens, e.OutputTokens, e.DurationMS)
+	case "agent_iteration":
+		fmt.Fprintf(w, "[AGENT] iter    %-24s iteration=%d\n", e.Node, e.Attempt)
 	case "tool_start":
-		fmt.Fprintf(w, "[TOOL]  →       %-24s tool=%s\n", e.Node, e.Tool)
+		if e.Attempt > 0 {
+			fmt.Fprintf(w, "[TOOL]  → [%d]  %-24s tool=%s\n", e.Attempt, e.Node, e.Tool)
+		} else {
+			fmt.Fprintf(w, "[TOOL]  →       %-24s tool=%s\n", e.Node, e.Tool)
+		}
 	case "tool_done":
-		fmt.Fprintf(w, "[TOOL]  ←       %-24s tool=%s duration=%dms\n", e.Node, e.Tool, e.DurationMS)
+		if e.Attempt > 0 {
+			fmt.Fprintf(w, "[TOOL]  ← [%d]  %-24s tool=%s duration=%dms\n", e.Attempt, e.Node, e.Tool, e.DurationMS)
+		} else {
+			fmt.Fprintf(w, "[TOOL]  ←       %-24s tool=%s duration=%dms\n", e.Node, e.Tool, e.DurationMS)
+		}
+	case "tool_error":
+		if e.Attempt > 0 {
+			fmt.Fprintf(w, "[TOOL]  err[%d]  %-24s tool=%s %s\n", e.Attempt, e.Node, e.Tool, truncate(e.Error, 60))
+		} else {
+			fmt.Fprintf(w, "[TOOL]  err     %-24s tool=%s %s\n", e.Node, e.Tool, truncate(e.Error, 60))
+		}
+	case "builtin_tool_used":
+		if e.Attempt > 0 {
+			fmt.Fprintf(w, "[TOOL]  ↩ [%d]  %-24s builtin=%s\n", e.Attempt, e.Node, e.Tool)
+		} else {
+			fmt.Fprintf(w, "[TOOL]  ↩       %-24s builtin=%s\n", e.Node, e.Tool)
+		}
 	case "map_start":
 		fmt.Fprintf(w, "[MAP]   start   %-24s items=%d\n", e.Node, e.ItemCount)
 	case "map_item_done":

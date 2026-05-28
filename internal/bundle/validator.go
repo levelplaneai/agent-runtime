@@ -41,8 +41,8 @@ func validateManifest(b *Bundle) []error {
 	}
 
 	for _, toolRef := range b.Manifest.ToolsRequired {
-		if _, _, ok := ParseRef(toolRef); !ok {
-			errs = append(errs, fmt.Errorf("manifest.tools_required %q: must use name@version format", toolRef))
+		if !isValidToolRef(toolRef) {
+			errs = append(errs, fmt.Errorf("manifest.tools_required %q: must use name@version (registry tool) or provider:name (built-in tool) format", toolRef))
 		}
 	}
 
@@ -235,6 +235,16 @@ func validateNodeSubflow(b *Bundle, node Node, localName, flowLoc string) []erro
 		errs = append(errs, fmt.Errorf("%s: config.flow %q: flow version not found in bundle", loc, flowRef))
 	}
 	return errs
+}
+
+// isValidToolRef returns true for registry refs ("name@version") and
+// built-in tool refs ("provider:name").
+func isValidToolRef(ref string) bool {
+	if _, _, ok := ParseRef(ref); ok {
+		return true // name@version
+	}
+	parts := strings.SplitN(ref, ":", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 func unmarshalString(raw json.RawMessage, v *string) error {

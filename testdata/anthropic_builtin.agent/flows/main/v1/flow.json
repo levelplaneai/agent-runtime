@@ -1,0 +1,14 @@
+{
+  "description": "Search the web and answer a question",
+  "inputs": {
+    "question": { "type": "string" }
+  },
+  "outputs": {
+    "answer": { "from": "$.search.output" }
+  },
+  "entry": "search",
+  "nodes": {
+    "search": "search@v1"
+  },
+  "edges": []
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Get the current temperature for a city. Always call this tool when asked about temperatures.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string", "description": "Name of the city" }
+    },
+    "required": ["city"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "temperature_f": { "type": "number", "description": "Temperature in Fahrenheit" }
+    },
+    "required": ["temperature_f"]
+  }
+}

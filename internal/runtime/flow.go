@@ -135,7 +135,7 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 		case "tool_call":
 			return ExecuteToolCall(ctx, node, r.execCtx, r.reg)
 		case "prompt":
-			return ExecutePrompt(ctx, node, nodeDir, r.execCtx, r.provider)
+			return ExecutePrompt(ctx, node, nodeDir, r.execCtx, r.provider, r.reg)
 		case "router":
 			return ExecuteRouter(ctx, localName, node, nodeDir, r.execCtx, r.provider)
 		case "map":
@@ -163,11 +163,15 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 		}
 	}
 
+	traceOutput := output
+	if node.Type == "tool_call" {
+		traceOutput = sanitizeOutputForTrace(output)
+	}
 	r.tracer.Emit(TraceEvent{
 		Event:      "node_done",
 		Node:       localName,
 		NodeType:   node.Type,
-		Output:     output,
+		Output:     traceOutput,
 		DurationMS: time.Since(nodeStart).Milliseconds(),
 	})
 	r.execCtx.SetNodeOutput(localName, output)

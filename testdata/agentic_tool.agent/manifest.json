@@ -1,0 +1,10 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "agentic_tool",
+  "description": "Tests a prompt node calling a registered tool via the agentic loop",
+  "entry": "main@v1",
+  "tools_required": [
+    "get_temperature@v1"
+  ]
+}

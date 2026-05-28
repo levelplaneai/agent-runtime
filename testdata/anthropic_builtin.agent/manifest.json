@@ -1,0 +1,10 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "anthropic_builtin",
+  "description": "Tests Anthropic built-in web_search tool",
+  "entry": "main@v1",
+  "tools_required": [
+    "anthropic:web_search"
+  ]
+}
