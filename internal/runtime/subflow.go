@@ -58,7 +58,7 @@ func (r *runner) executeSubflow(ctx context.Context, localName string, node bund
 		depth:    r.depth + 1,
 	}
 
-	if err := sub.runFrontier(ctx); err != nil {
+	if err := sub.runFrontier(ctx, nil); err != nil {
 		return nil, fmt.Errorf("subflow %q: %w", flowRef, err)
 	}
 

@@ -49,7 +49,7 @@ func TestAnthropicWebSearch_Integration(t *testing.T) {
 
 	out, err := RunFlow(ctx, b, map[string]any{
 		"question": "What year was the Eiffel Tower completed? Search the web to confirm.",
-	}, nil, providerReg)
+	}, nil, providerReg, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestGeminiCodeExecution_Integration(t *testing.T) {
 	// sum(1..100) = 5050 — a simple deterministic result we can assert on.
 	out, err := RunFlow(ctx, b, map[string]any{
 		"problem": "Use Python to compute the sum of all integers from 1 to 100 inclusive. State the final answer clearly.",
-	}, nil, providerReg)
+	}, nil, providerReg, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}

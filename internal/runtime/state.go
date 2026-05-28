@@ -92,6 +92,17 @@ func (c *ExecutionContext) IterVar(name string) (any, bool) {
 	return v, ok
 }
 
+// AllNodeOutputs returns a copy of the recorded node outputs map.
+func (c *ExecutionContext) AllNodeOutputs() map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]any, len(c.nodeOutputs))
+	for k, v := range c.nodeOutputs {
+		out[k] = v
+	}
+	return out
+}
+
 // Clone returns a new ExecutionContext with a snapshot of the current node
 // outputs and a shared reference to the immutable inputs map. The clone has
 // its own iterVars and currentNode, so concurrent map iterations can call

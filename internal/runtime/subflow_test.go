@@ -65,7 +65,7 @@ func TestRunFlow_SubflowBasic(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestRunFlow_SubflowInputMapping(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestRunFlow_SubflowError(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error from failing child, got nil")
 	}
@@ -222,7 +222,7 @@ func TestRunFlow_SubflowMissingFlowRef(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	_, err := RunFlow(context.Background(), b, map[string]any{}, NewRegistry(), nil)
+	_, err := RunFlow(context.Background(), b, map[string]any{}, NewRegistry(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing config.flow, got nil")
 	}
@@ -257,7 +257,7 @@ func TestRunFlow_SubflowDepthLimit(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected depth-limit error for recursive subflow, got nil")
 	}

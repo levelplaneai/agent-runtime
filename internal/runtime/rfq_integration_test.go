@@ -55,7 +55,7 @@ func TestRFQProcessor_Integration(t *testing.T) {
 	1. Widget A (part# WGT-100), qty 10
 	2. Bolt B (part# BLT-200), qty 50`
 
-	out, err := RunFlow(ctx, b, map[string]any{"rfq_document": rfqDoc}, reg, providerReg)
+	out, err := RunFlow(ctx, b, map[string]any{"rfq_document": rfqDoc}, reg, providerReg, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}

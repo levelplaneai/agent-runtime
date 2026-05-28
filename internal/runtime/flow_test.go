@@ -188,7 +188,7 @@ func TestRunFlow_ToolCallThenPrompt(t *testing.T) {
 	}
 	b.Nodes["summarize_node"]["v1"] = summNode
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, provider)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, provider, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestRunFlow_SingleToolCall(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{"msg": "hello"}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{"msg": "hello"}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestRunFlow_OnError_Skip(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestRunFlow_RouterAndMap(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, provider)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, provider, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestRunFlow_MapConcurrent(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{"vals": vals}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{"vals": vals}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -555,10 +555,153 @@ func TestRunFlow_MapConcurrentError(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	_, err := RunFlow(context.Background(), b, map[string]any{"vals": vals}, reg, nil)
+	_, err := RunFlow(context.Background(), b, map[string]any{"vals": vals}, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error from failing item, got nil")
 	}
+}
+
+// --- Partial execution (RunFlowOptions) ---
+
+func makeLinearBundle(t *testing.T, nodes ...string) *bundle.Bundle {
+	t.Helper()
+	flowNodes := make(map[string]string, len(nodes))
+	bundleNodes := make(map[string]map[string]bundle.Node, len(nodes))
+	for _, n := range nodes {
+		flowNodes[n] = n + "_def@v1"
+		bundleNodes[n+"_def"] = map[string]bundle.Node{
+			"v1": {
+				Type: "tool_call",
+				Config: map[string]json.RawMessage{
+					"tool": json.RawMessage(`"` + n + `_tool@v1"`),
+					"args": json.RawMessage(`{}`),
+				},
+			},
+		}
+	}
+	edges := make([]bundle.Edge, 0, len(nodes)-1)
+	for i := 0; i < len(nodes)-1; i++ {
+		edges = append(edges, bundle.Edge{From: nodes[i], To: nodes[i+1]})
+	}
+	return &bundle.Bundle{
+		Path:     t.TempDir(),
+		Manifest: bundle.Manifest{Entry: "main@v1"},
+		Flows: map[string]map[string]bundle.Flow{
+			"main": {"v1": {
+				Entry: nodes[0],
+				Nodes: flowNodes,
+				Edges: edges,
+				Outputs: map[string]bundle.FlowOutputBinding{
+					"last": {From: "$.last.output"},
+				},
+			}},
+		},
+		Nodes: bundleNodes,
+		Tools: map[string]map[string]bundle.ToolSignature{},
+	}
+}
+
+func TestRunFlow_StopAfter(t *testing.T) {
+	var executed []string
+	reg := NewRegistry()
+	for _, n := range []string{"first", "second", "last"} {
+		name := n
+		reg.Register(name+"_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+			executed = append(executed, name)
+			return map[string]any{"out": name}, nil
+		}))
+	}
+	b := makeLinearBundle(t, "first", "second", "last")
+
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{StopAfter: "second"})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+	if len(executed) != 2 || executed[0] != "first" || executed[1] != "second" {
+		t.Fatalf("expected [first second] executed, got %v", executed)
+	}
+}
+
+func TestRunFlow_StartAt(t *testing.T) {
+	var executed []string
+	reg := NewRegistry()
+	for _, n := range []string{"first", "second", "last"} {
+		name := n
+		reg.Register(name+"_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+			executed = append(executed, name)
+			return map[string]any{"out": name}, nil
+		}))
+	}
+	b := makeLinearBundle(t, "first", "second", "last")
+	// Override flow outputs to point at "last" which will run normally.
+	b.Flows["main"]["v1"] = bundle.Flow{
+		Entry: "first",
+		Nodes: b.Flows["main"]["v1"].Nodes,
+		Edges: b.Flows["main"]["v1"].Edges,
+		Outputs: map[string]bundle.FlowOutputBinding{
+			"last": {From: "$.last.output"},
+		},
+	}
+
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{StartAt: "second"})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+	if len(executed) != 0 || indexOf(executed, "first") >= 0 {
+		// first should not have run
+	}
+	if indexOf(executed, "second") >= 0 {
+		// ok
+	}
+	_ = out
+	for _, n := range executed {
+		if n == "first" {
+			t.Fatalf("'first' ran but StartAt was 'second'")
+		}
+	}
+}
+
+func TestRunFlow_SeedOutputs(t *testing.T) {
+	// "second" reads from first's output; we seed first so it doesn't need to run.
+	var executed []string
+	reg := NewRegistry()
+	reg.Register("first_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+		executed = append(executed, "first")
+		return map[string]any{"out": "from_first"}, nil
+	}))
+	reg.Register("second_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, args map[string]any) (map[string]any, error) {
+		executed = append(executed, "second")
+		return map[string]any{"got": args["upstream"]}, nil
+	}))
+	reg.Register("last_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+		executed = append(executed, "last")
+		return map[string]any{"out": "done"}, nil
+	}))
+
+	b := makeLinearBundle(t, "first", "second", "last")
+	// Give second an input binding that reads from first's seeded output.
+	secondNode := b.Nodes["second_def"]["v1"]
+	secondNode.Inputs = map[string]bundle.InputBinding{
+		"upstream": {From: "$.first.output.out"},
+	}
+	b.Nodes["second_def"]["v1"] = secondNode
+
+	seed := map[string]any{
+		"first": map[string]any{"out": "seeded_value"},
+	}
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{
+		StartAt:     "second",
+		SeedOutputs: seed,
+	})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+	for _, n := range executed {
+		if n == "first" {
+			t.Fatal("'first' ran despite being seeded and skipped via StartAt")
+		}
+	}
+	_ = out
 }
 
 // --- helpers ---

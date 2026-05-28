@@ -58,7 +58,7 @@ func TestAgenticToolCall_Integration(t *testing.T) {
 	tracer := NewTracer(&traceBuf, os.Stderr)
 	ctx := ContextWithTracer(context.Background(), tracer)
 
-	out, err := RunFlow(ctx, b, map[string]any{"city": "TestCity"}, reg, providerReg)
+	out, err := RunFlow(ctx, b, map[string]any{"city": "TestCity"}, reg, providerReg, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}

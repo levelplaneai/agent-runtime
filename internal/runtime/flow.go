@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -9,6 +10,18 @@ import (
 
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
+
+// RunFlowOptions configures optional partial-execution behaviour for RunFlow.
+// All fields are optional; zero values restore default full-flow behaviour.
+type RunFlowOptions struct {
+	StartAt     string         // local node name to begin from (empty means flow.Entry)
+	StopAfter   string         // local node name to halt after (empty means run to completion)
+	SeedOutputs map[string]any // pre-populate node outputs before execution starts
+}
+
+// errStopAfterReached is a sentinel returned by runFrontier when execution halts at
+// the node specified by RunFlowOptions.StopAfter. RunFlow converts it to a clean result.
+var errStopAfterReached = errors.New("stop after reached")
 
 // RunFlow executes the bundle's entry flow with the given inputs.
 //
@@ -26,6 +39,7 @@ func RunFlow(
 	inputs map[string]any,
 	reg *Registry,
 	provider LLMProvider,
+	opts *RunFlowOptions,
 ) (map[string]any, error) {
 	flowName, flowVersion, ok := bundle.ParseRef(b.Manifest.Entry)
 	if !ok {
@@ -50,6 +64,11 @@ func RunFlow(
 	})
 
 	execCtx := NewExecutionContext(inputs)
+	if opts != nil {
+		for k, v := range opts.SeedOutputs {
+			execCtx.SetNodeOutput(k, v)
+		}
+	}
 	r := &runner{
 		b:        b,
 		flow:     flow,
@@ -60,7 +79,16 @@ func RunFlow(
 		tracer:   t,
 	}
 
-	if err := r.runFrontier(ctx); err != nil {
+	if err := r.runFrontier(ctx, opts); err != nil {
+		if errors.Is(err, errStopAfterReached) {
+			t.Emit(TraceEvent{
+				Event:      "flow_done",
+				Bundle:     b.Manifest.Name,
+				Flow:       b.Manifest.Entry,
+				DurationMS: time.Since(flowStart).Milliseconds(),
+			})
+			return execCtx.AllNodeOutputs(), nil
+		}
 		t.Emit(TraceEvent{
 			Event:      "flow_error",
 			Bundle:     b.Manifest.Name,
@@ -179,10 +207,15 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 	return output, gotoTarget, nil
 }
 
-// runFrontier drives the frontier-based execution loop for r.flow starting from
-// its declared entry node. It is used by both RunFlow and executeSubflow.
-func (r *runner) runFrontier(ctx context.Context) error {
-	frontier := []string{r.flow.Entry}
+// runFrontier drives the frontier-based execution loop for r.flow. opts may be
+// nil (full run from flow.Entry). When opts.StopAfter is reached it returns
+// errStopAfterReached so the caller can surface a partial result.
+func (r *runner) runFrontier(ctx context.Context, opts *RunFlowOptions) error {
+	start := r.flow.Entry
+	if opts != nil && opts.StartAt != "" {
+		start = opts.StartAt
+	}
+	frontier := []string{start}
 	visited := make(map[string]bool)
 	for len(frontier) > 0 {
 		localName := frontier[0]
@@ -194,6 +227,9 @@ func (r *runner) runFrontier(ctx context.Context) error {
 		_, gotoTarget, err := r.executeNode(ctx, localName)
 		if err != nil {
 			return fmt.Errorf("node %q: %w", localName, err)
+		}
+		if opts != nil && opts.StopAfter != "" && localName == opts.StopAfter {
+			return errStopAfterReached
 		}
 		if gotoTarget != "" {
 			frontier = append(frontier, gotoTarget)

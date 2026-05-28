@@ -57,6 +57,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `  --tool name@version                             register a stub tool that returns {}`)
 	fmt.Fprintln(os.Stderr, "  --data-dir <path>                               SDK mode: stream events to stdout and persist run to <path>/runs/<run-id>/")
 	fmt.Fprintln(os.Stderr, "  --run-id <id>                                   run identifier (required with --data-dir)")
+	fmt.Fprintln(os.Stderr, "  --from <node>                                   start execution from this node (partial run)")
+	fmt.Fprintln(os.Stderr, "  --to <node>                                     stop execution after this node (partial run)")
+	fmt.Fprintln(os.Stderr, "  --seed <file>                                   JSON file with pre-seeded node outputs ({\"seed_outputs\":{...}})")
 }
 
 func cmdValidate(args []string) {
@@ -123,6 +126,32 @@ func cmdRun(args []string) {
 		}
 		fmt.Fprintln(os.Stderr, `hint: use --tool name@version='{"key":"value"}' for a stub or --tool name@version=https://... for an HTTP service`)
 		os.Exit(1)
+	}
+
+	// Validate --from / --to node names against the entry flow before execution.
+	if flags.startAt != "" || flags.stopAfter != "" {
+		flowName, flowVersion, ok := bundle.ParseRef(b.Manifest.Entry)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "error: manifest.entry %q: invalid name@version format\n", b.Manifest.Entry)
+			os.Exit(1)
+		}
+		entryFlow, ok := b.Flows[flowName][flowVersion]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "error: entry flow %q not found in bundle\n", b.Manifest.Entry)
+			os.Exit(1)
+		}
+		if flags.startAt != "" {
+			if _, ok := entryFlow.Nodes[flags.startAt]; !ok {
+				fmt.Fprintf(os.Stderr, "error: --from %q: node not found in flow %q\n", flags.startAt, b.Manifest.Entry)
+				os.Exit(1)
+			}
+		}
+		if flags.stopAfter != "" {
+			if _, ok := entryFlow.Nodes[flags.stopAfter]; !ok {
+				fmt.Fprintf(os.Stderr, "error: --to %q: node not found in flow %q\n", flags.stopAfter, b.Manifest.Entry)
+				os.Exit(1)
+			}
+		}
 	}
 
 	// Pre-flight: check for missing API keys before creating the run directory so that
@@ -195,7 +224,32 @@ func cmdRun(args []string) {
 
 	provider := buildProviderRegistry()
 
-	out, runErr := runtime.RunFlow(ctx, b, flags.inputs, reg, provider)
+	var runOpts *runtime.RunFlowOptions
+	if flags.startAt != "" || flags.stopAfter != "" || flags.seedPath != "" {
+		var seedOutputs map[string]any
+		if flags.seedPath != "" {
+			data, err := os.ReadFile(flags.seedPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error reading seed file: %v\n", err)
+				os.Exit(1)
+			}
+			var seedFile struct {
+				SeedOutputs map[string]any `json:"seed_outputs"`
+			}
+			if err := json.Unmarshal(data, &seedFile); err != nil {
+				fmt.Fprintf(os.Stderr, "error parsing seed file %q: %v\n", flags.seedPath, err)
+				os.Exit(1)
+			}
+			seedOutputs = seedFile.SeedOutputs
+		}
+		runOpts = &runtime.RunFlowOptions{
+			StartAt:     flags.startAt,
+			StopAfter:   flags.stopAfter,
+			SeedOutputs: seedOutputs,
+		}
+	}
+
+	out, runErr := runtime.RunFlow(ctx, b, flags.inputs, reg, provider, runOpts)
 
 	// Persist run result when SDK mode is active.
 	if flags.dataDir != "" {
@@ -244,6 +298,9 @@ type runFlags struct {
 	tools     map[string]runtime.Tool
 	dataDir   string
 	runID     string
+	startAt   string
+	stopAfter string
+	seedPath  string
 }
 
 // parseRunFlags parses --input, --trace, --tool, --data-dir, and --run-id flags.
@@ -310,6 +367,24 @@ func parseRunFlags(args []string) (runFlags, error) {
 				return f, fmt.Errorf("--run-id requires an id argument")
 			}
 			f.runID = args[i]
+		case "--from":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--from requires a node name argument")
+			}
+			f.startAt = args[i]
+		case "--to":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--to requires a node name argument")
+			}
+			f.stopAfter = args[i]
+		case "--seed":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--seed requires a file path argument")
+			}
+			f.seedPath = args[i]
 		default:
 			return f, fmt.Errorf("unexpected argument %q", args[i])
 		}

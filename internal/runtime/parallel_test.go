@@ -59,7 +59,7 @@ func TestRunFlow_ParallelBasic(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRunFlow_ParallelError(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err == nil {
 		t.Fatal("expected error from failing branch, got nil")
 	}
@@ -209,7 +209,7 @@ func TestRunFlow_ParallelBranchIsolation(t *testing.T) {
 		Tools: map[string]map[string]bundle.ToolSignature{},
 	}
 
-	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil)
+	out, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, nil)
 	if err != nil {
 		t.Fatalf("RunFlow error: %v", err)
 	}
