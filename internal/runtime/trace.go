@@ -33,6 +33,7 @@ type TraceEvent struct {
 	Condition    string         `json:"condition,omitempty"`
 	ChosenTarget string         `json:"chosen_target,omitempty"`
 	BranchName   string         `json:"branch_name,omitempty"`
+	RunID        string         `json:"run_id,omitempty"`
 	TS           int64          `json:"ts"`
 }
 

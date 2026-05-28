@@ -55,10 +55,12 @@ func (r *runner) executeSubflow(ctx context.Context, localName string, node bund
 		provider: r.provider,
 		nextMap:  buildNextMap(subFlow),
 		tracer:   r.tracer,
+		runID:    r.runID,
 		depth:    r.depth + 1,
 	}
 
-	if err := sub.runFrontier(ctx, nil); err != nil {
+	// Subflows execute atomically; no checkpoint fires inside a subflow.
+	if err := sub.runFrontier(ctx, []string{subFlow.Entry}, make(map[string]bool), nil); err != nil {
 		return nil, fmt.Errorf("subflow %q: %w", flowRef, err)
 	}
 

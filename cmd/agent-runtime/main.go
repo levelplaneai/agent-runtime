@@ -224,8 +224,19 @@ func cmdRun(args []string) {
 
 	provider := buildProviderRegistry()
 
+	// --resume: validate that conflicting flags are not set.
+	if flags.resumePath != "" {
+		if len(flags.inputs) > 0 || flags.startAt != "" || flags.seedPath != "" {
+			fmt.Fprintln(os.Stderr, "error: --resume cannot be combined with --input, --from, or --seed (state is in the snapshot)")
+			os.Exit(1)
+		}
+		if flags.dataDir != "" && flags.runID != "" {
+			// runID will be validated against the snapshot below.
+		}
+	}
+
 	var runOpts *runtime.RunFlowOptions
-	if flags.startAt != "" || flags.stopAfter != "" || flags.seedPath != "" {
+	if flags.startAt != "" || flags.stopAfter != "" || flags.seedPath != "" || flags.checkpointPath != "" {
 		var seedOutputs map[string]any
 		if flags.seedPath != "" {
 			data, err := os.ReadFile(flags.seedPath)
@@ -249,7 +260,56 @@ func cmdRun(args []string) {
 		}
 	}
 
-	out, runErr := runtime.RunFlow(ctx, b, flags.inputs, reg, provider, runOpts)
+	// --checkpoint: attach atomic-write callback.
+	if flags.checkpointPath != "" {
+		if runOpts == nil {
+			runOpts = &runtime.RunFlowOptions{}
+		}
+		cpPath := flags.checkpointPath
+		runOpts.OnCheckpoint = func(snap runtime.Snapshot) error {
+			data, err := json.Marshal(snap)
+			if err != nil {
+				return err
+			}
+			tmp := cpPath + ".tmp"
+			if err := os.WriteFile(tmp, data, 0644); err != nil {
+				return err
+			}
+			return os.Rename(tmp, cpPath)
+		}
+	}
+
+	// --resume: set StopAfter if --to was also given.
+	if flags.resumePath != "" && flags.stopAfter != "" {
+		if runOpts == nil {
+			runOpts = &runtime.RunFlowOptions{}
+		}
+		runOpts.StopAfter = flags.stopAfter
+	}
+
+	var (
+		out    map[string]any
+		runErr error
+	)
+	if flags.resumePath != "" {
+		data, err := os.ReadFile(flags.resumePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading snapshot file: %v\n", err)
+			os.Exit(1)
+		}
+		var snap runtime.Snapshot
+		if err := json.Unmarshal(data, &snap); err != nil {
+			fmt.Fprintf(os.Stderr, "error parsing snapshot file %q: %v\n", flags.resumePath, err)
+			os.Exit(1)
+		}
+		if flags.dataDir != "" && flags.runID != "" && flags.runID != snap.RunID {
+			fmt.Fprintf(os.Stderr, "error: --run-id %q does not match snapshot run_id %q\n", flags.runID, snap.RunID)
+			os.Exit(1)
+		}
+		out, runErr = runtime.RunFlowResume(ctx, b, snap, reg, provider, runOpts)
+	} else {
+		out, runErr = runtime.RunFlow(ctx, b, flags.inputs, reg, provider, runOpts)
+	}
 
 	// Persist run result when SDK mode is active.
 	if flags.dataDir != "" {
@@ -293,14 +353,16 @@ func cmdRun(args []string) {
 
 // runFlags holds all parsed flags for the run subcommand.
 type runFlags struct {
-	inputs    map[string]any
-	tracePath string
-	tools     map[string]runtime.Tool
-	dataDir   string
-	runID     string
-	startAt   string
-	stopAfter string
-	seedPath  string
+	inputs         map[string]any
+	tracePath      string
+	tools          map[string]runtime.Tool
+	dataDir        string
+	runID          string
+	startAt        string
+	stopAfter      string
+	seedPath       string
+	checkpointPath string
+	resumePath     string
 }
 
 // parseRunFlags parses --input, --trace, --tool, --data-dir, and --run-id flags.
@@ -385,6 +447,18 @@ func parseRunFlags(args []string) (runFlags, error) {
 				return f, fmt.Errorf("--seed requires a file path argument")
 			}
 			f.seedPath = args[i]
+		case "--checkpoint":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--checkpoint requires a file path argument")
+			}
+			f.checkpointPath = args[i]
+		case "--resume":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--resume requires a file path argument")
+			}
+			f.resumePath = args[i]
 		default:
 			return f, fmt.Errorf("unexpected argument %q", args[i])
 		}

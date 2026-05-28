@@ -11,12 +11,23 @@ import (
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
-// RunFlowOptions configures optional partial-execution behaviour for RunFlow.
+// generateRunID returns a simple time-based hex run identifier.
+func generateRunID() string {
+	return fmt.Sprintf("%x", time.Now().UnixNano())
+}
+
+// RunFlowOptions configures optional partial-execution and checkpoint behaviour for RunFlow.
 // All fields are optional; zero values restore default full-flow behaviour.
 type RunFlowOptions struct {
 	StartAt     string         // local node name to begin from (empty means flow.Entry)
 	StopAfter   string         // local node name to halt after (empty means run to completion)
 	SeedOutputs map[string]any // pre-populate node outputs before execution starts
+
+	// RunID tags all trace events emitted during this run. Auto-generated if empty.
+	RunID string
+	// OnCheckpoint is called after each node completes successfully. The caller
+	// decides where to persist the snapshot (file, DB, etc.).
+	OnCheckpoint func(Snapshot) error
 }
 
 // errStopAfterReached is a sentinel returned by runFrontier when execution halts at
@@ -54,6 +65,13 @@ func RunFlow(
 		return nil, fmt.Errorf("flow %q version %q not found in bundle", flowName, flowVersion)
 	}
 
+	runID := ""
+	if opts != nil && opts.RunID != "" {
+		runID = opts.RunID
+	} else {
+		runID = generateRunID()
+	}
+
 	t := tracerFrom(ctx)
 	flowStart := time.Now()
 	t.Emit(TraceEvent{
@@ -61,6 +79,7 @@ func RunFlow(
 		Bundle: b.Manifest.Name,
 		Flow:   b.Manifest.Entry,
 		Inputs: inputs,
+		RunID:  runID,
 	})
 
 	execCtx := NewExecutionContext(inputs)
@@ -77,15 +96,21 @@ func RunFlow(
 		provider: provider,
 		nextMap:  buildNextMap(flow),
 		tracer:   t,
+		runID:    runID,
 	}
 
-	if err := r.runFrontier(ctx, opts); err != nil {
+	start := flow.Entry
+	if opts != nil && opts.StartAt != "" {
+		start = opts.StartAt
+	}
+	if err := r.runFrontier(ctx, []string{start}, make(map[string]bool), opts); err != nil {
 		if errors.Is(err, errStopAfterReached) {
 			t.Emit(TraceEvent{
 				Event:      "flow_done",
 				Bundle:     b.Manifest.Name,
 				Flow:       b.Manifest.Entry,
 				DurationMS: time.Since(flowStart).Milliseconds(),
+				RunID:      runID,
 			})
 			return execCtx.AllNodeOutputs(), nil
 		}
@@ -94,6 +119,7 @@ func RunFlow(
 			Bundle:     b.Manifest.Name,
 			Error:      err.Error(),
 			DurationMS: time.Since(flowStart).Milliseconds(),
+			RunID:      runID,
 		})
 		return nil, err
 	}
@@ -105,6 +131,7 @@ func RunFlow(
 			Bundle:     b.Manifest.Name,
 			Error:      err.Error(),
 			DurationMS: time.Since(flowStart).Milliseconds(),
+			RunID:      runID,
 		})
 		return nil, err
 	}
@@ -113,6 +140,7 @@ func RunFlow(
 		Bundle:     b.Manifest.Name,
 		Flow:       b.Manifest.Entry,
 		DurationMS: time.Since(flowStart).Milliseconds(),
+		RunID:      runID,
 	})
 	return result, nil
 }
@@ -132,7 +160,8 @@ type runner struct {
 	// second edge from the same source would silently overwrite the first.
 	nextMap map[string]string
 	tracer  *Tracer
-	depth   int // subflow nesting depth; capped at maxSubflowDepth
+	runID   string // stamped on flow/node trace events; carries through on resume
+	depth   int    // subflow nesting depth; capped at maxSubflowDepth
 }
 
 const maxSubflowDepth = 32
@@ -156,7 +185,7 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 
 	r.execCtx.SetCurrentNode(localName)
 	nodeStart := time.Now()
-	r.tracer.Emit(TraceEvent{Event: "node_start", Node: localName, NodeType: node.Type})
+	r.tracer.Emit(TraceEvent{Event: "node_start", Node: localName, NodeType: node.Type, RunID: r.runID})
 
 	output, err := ApplyErrorPolicy(ctx, localName, node, func() (map[string]any, error) {
 		switch node.Type {
@@ -177,7 +206,7 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 		}
 	})
 	if err != nil {
-		r.tracer.Emit(TraceEvent{Event: "node_error", Node: localName, Error: err.Error()})
+		r.tracer.Emit(TraceEvent{Event: "node_error", Node: localName, Error: err.Error(), RunID: r.runID})
 		return nil, "", err
 	}
 
@@ -201,22 +230,19 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 		NodeType:   node.Type,
 		Output:     traceOutput,
 		DurationMS: time.Since(nodeStart).Milliseconds(),
+		RunID:      r.runID,
 	})
 	r.execCtx.SetNodeOutput(localName, output)
 
 	return output, gotoTarget, nil
 }
 
-// runFrontier drives the frontier-based execution loop for r.flow. opts may be
-// nil (full run from flow.Entry). When opts.StopAfter is reached it returns
-// errStopAfterReached so the caller can surface a partial result.
-func (r *runner) runFrontier(ctx context.Context, opts *RunFlowOptions) error {
-	start := r.flow.Entry
-	if opts != nil && opts.StartAt != "" {
-		start = opts.StartAt
-	}
-	frontier := []string{start}
-	visited := make(map[string]bool)
+// runFrontier drives the frontier-based execution loop for r.flow.
+// frontier and visited are the initial execution state; pass []string{start}
+// and make(map[string]bool) for a fresh run, or restored values for resume.
+// opts may be nil. When opts.StopAfter is reached it returns errStopAfterReached
+// so the caller can surface a partial result.
+func (r *runner) runFrontier(ctx context.Context, frontier []string, visited map[string]bool, opts *RunFlowOptions) error {
 	for len(frontier) > 0 {
 		localName := frontier[0]
 		frontier = frontier[1:]
@@ -229,6 +255,12 @@ func (r *runner) runFrontier(ctx context.Context, opts *RunFlowOptions) error {
 			return fmt.Errorf("node %q: %w", localName, err)
 		}
 		if opts != nil && opts.StopAfter != "" && localName == opts.StopAfter {
+			if opts.OnCheckpoint != nil {
+				snap := r.buildSnapshot(visited, nil)
+				if err := opts.OnCheckpoint(snap); err != nil {
+					return err
+				}
+			}
 			return errStopAfterReached
 		}
 		if gotoTarget != "" {
@@ -236,8 +268,141 @@ func (r *runner) runFrontier(ctx context.Context, opts *RunFlowOptions) error {
 		} else if next, ok := r.nextMap[localName]; ok {
 			frontier = append(frontier, next)
 		}
+		if opts != nil && opts.OnCheckpoint != nil {
+			snap := r.buildSnapshot(visited, frontier)
+			if err := opts.OnCheckpoint(snap); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// buildSnapshot constructs a Snapshot from the runner's current state.
+func (r *runner) buildSnapshot(visited map[string]bool, frontier []string) Snapshot {
+	frontierCopy := make([]string, len(frontier))
+	copy(frontierCopy, frontier)
+	return Snapshot{
+		RunID:         r.runID,
+		Timestamp:     time.Now(),
+		BundleVersion: r.b.Manifest.BundleVersion,
+		FlowRef:       r.b.Manifest.Entry,
+		Inputs:        marshalAnyMap(r.execCtx.Inputs()),
+		NodeOutputs:   marshalAnyMap(r.execCtx.AllNodeOutputs()),
+		Visited:       sortedKeys(visited),
+		Frontier:      frontierCopy,
+	}
+}
+
+// RunFlowResume resumes a flow run from a previously captured Snapshot.
+// It verifies bundle/flow compatibility, restores execution context, and
+// re-enters the frontier loop from where it left off.
+func RunFlowResume(
+	ctx context.Context,
+	b *bundle.Bundle,
+	snap Snapshot,
+	reg *Registry,
+	provider LLMProvider,
+	opts *RunFlowOptions,
+) (map[string]any, error) {
+	if b.Manifest.BundleVersion != snap.BundleVersion {
+		return nil, fmt.Errorf("bundle version mismatch: snapshot=%q bundle=%q",
+			snap.BundleVersion, b.Manifest.BundleVersion)
+	}
+	if b.Manifest.Entry != snap.FlowRef {
+		return nil, fmt.Errorf("flow ref mismatch: snapshot=%q bundle=%q",
+			snap.FlowRef, b.Manifest.Entry)
+	}
+
+	flowName, flowVersion, ok := bundle.ParseRef(b.Manifest.Entry)
+	if !ok {
+		return nil, fmt.Errorf("manifest.entry %q: invalid name@version format", b.Manifest.Entry)
+	}
+	versions, ok := b.Flows[flowName]
+	if !ok {
+		return nil, fmt.Errorf("flow %q not found in bundle", flowName)
+	}
+	flow, ok := versions[flowVersion]
+	if !ok {
+		return nil, fmt.Errorf("flow %q version %q not found in bundle", flowName, flowVersion)
+	}
+
+	inputs := unmarshalAnyMap(snap.Inputs)
+	nodeOutputs := unmarshalAnyMap(snap.NodeOutputs)
+
+	execCtx := NewExecutionContext(inputs)
+	for k, v := range nodeOutputs {
+		execCtx.SetNodeOutput(k, v)
+	}
+
+	runID := snap.RunID
+	if opts != nil && opts.RunID != "" {
+		runID = opts.RunID
+	}
+
+	t := tracerFrom(ctx)
+	resumeStart := time.Now()
+	t.Emit(TraceEvent{
+		Event:  "flow_start",
+		Bundle: b.Manifest.Name,
+		Flow:   b.Manifest.Entry,
+		Inputs: inputs,
+		RunID:  runID,
+	})
+
+	r := &runner{
+		b:        b,
+		flow:     flow,
+		execCtx:  execCtx,
+		reg:      reg,
+		provider: provider,
+		nextMap:  buildNextMap(flow),
+		tracer:   t,
+		runID:    runID,
+	}
+
+	frontier := snap.Frontier
+	visited := sliceToSet(snap.Visited)
+	if err := r.runFrontier(ctx, frontier, visited, opts); err != nil {
+		if errors.Is(err, errStopAfterReached) {
+			t.Emit(TraceEvent{
+				Event:      "flow_done",
+				Bundle:     b.Manifest.Name,
+				Flow:       b.Manifest.Entry,
+				DurationMS: time.Since(resumeStart).Milliseconds(),
+				RunID:      runID,
+			})
+			return execCtx.AllNodeOutputs(), nil
+		}
+		t.Emit(TraceEvent{
+			Event:      "flow_error",
+			Bundle:     b.Manifest.Name,
+			Error:      err.Error(),
+			DurationMS: time.Since(resumeStart).Milliseconds(),
+			RunID:      runID,
+		})
+		return nil, err
+	}
+
+	result, err := resolveFlowOutputs(flow, execCtx)
+	if err != nil {
+		t.Emit(TraceEvent{
+			Event:      "flow_error",
+			Bundle:     b.Manifest.Name,
+			Error:      err.Error(),
+			DurationMS: time.Since(resumeStart).Milliseconds(),
+			RunID:      runID,
+		})
+		return nil, err
+	}
+	t.Emit(TraceEvent{
+		Event:      "flow_done",
+		Bundle:     b.Manifest.Name,
+		Flow:       b.Manifest.Entry,
+		DurationMS: time.Since(resumeStart).Milliseconds(),
+		RunID:      runID,
+	})
+	return result, nil
 }
 
 // buildNextMap builds a from→to lookup from the flow's static edges.

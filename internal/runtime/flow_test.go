@@ -704,6 +704,237 @@ func TestRunFlow_SeedOutputs(t *testing.T) {
 	_ = out
 }
 
+// --- Checkpoint & Resume (Feature 2) ---
+
+func TestRunFlow_Checkpoint(t *testing.T) {
+	var snaps []Snapshot
+	reg := NewRegistry()
+	for _, n := range []string{"first", "second", "last"} {
+		name := n
+		reg.Register(name+"_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+			return map[string]any{"out": name}, nil
+		}))
+	}
+	b := makeLinearBundle(t, "first", "second", "last")
+	b.Manifest.BundleVersion = "1.0.0"
+
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{
+		OnCheckpoint: func(s Snapshot) error {
+			snaps = append(snaps, s)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+	if len(snaps) != 3 {
+		t.Fatalf("expected 3 checkpoints (one per node), got %d", len(snaps))
+	}
+
+	// After first node: visited=[first], frontier=[second]
+	if !sliceEq(snaps[0].Visited, []string{"first"}) {
+		t.Errorf("snap[0].Visited: got %v, want [first]", snaps[0].Visited)
+	}
+	if !sliceEq(snaps[0].Frontier, []string{"second"}) {
+		t.Errorf("snap[0].Frontier: got %v, want [second]", snaps[0].Frontier)
+	}
+	// After last node: frontier should be empty
+	if len(snaps[2].Frontier) != 0 {
+		t.Errorf("snap[2].Frontier: expected empty, got %v", snaps[2].Frontier)
+	}
+	if !sliceEq(snaps[2].Visited, []string{"first", "last", "second"}) {
+		t.Errorf("snap[2].Visited: got %v", snaps[2].Visited)
+	}
+	// BundleVersion and FlowRef propagated
+	if snaps[0].BundleVersion != "1.0.0" {
+		t.Errorf("BundleVersion: got %q, want 1.0.0", snaps[0].BundleVersion)
+	}
+	if snaps[0].FlowRef != b.Manifest.Entry {
+		t.Errorf("FlowRef: got %q, want %q", snaps[0].FlowRef, b.Manifest.Entry)
+	}
+	// RunID consistent across all snapshots
+	if snaps[0].RunID == "" {
+		t.Error("RunID should be non-empty")
+	}
+	for i, s := range snaps {
+		if s.RunID != snaps[0].RunID {
+			t.Errorf("snap[%d].RunID %q != snap[0].RunID %q", i, s.RunID, snaps[0].RunID)
+		}
+	}
+	// NodeOutputs captured
+	if snaps[0].NodeOutputs["first"] == nil {
+		t.Error("snap[0] should have first's NodeOutput")
+	}
+}
+
+func TestRunFlow_Checkpoint_StopAfter(t *testing.T) {
+	var snaps []Snapshot
+	reg := NewRegistry()
+	for _, n := range []string{"first", "second", "last"} {
+		name := n
+		reg.Register(name+"_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+			return map[string]any{"out": name}, nil
+		}))
+	}
+	b := makeLinearBundle(t, "first", "second", "last")
+
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{
+		StopAfter: "first",
+		OnCheckpoint: func(s Snapshot) error {
+			snaps = append(snaps, s)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunFlow error: %v", err)
+	}
+	// Checkpoint fires on StopAfter node too
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 checkpoint, got %d", len(snaps))
+	}
+	if !sliceEq(snaps[0].Visited, []string{"first"}) {
+		t.Errorf("Visited: got %v", snaps[0].Visited)
+	}
+	// frontier is nil (stopped)
+	if len(snaps[0].Frontier) != 0 {
+		t.Errorf("Frontier should be empty on stop, got %v", snaps[0].Frontier)
+	}
+}
+
+func TestRunFlowResume(t *testing.T) {
+	var executed []string
+	reg := NewRegistry()
+	for _, n := range []string{"first", "second", "last"} {
+		name := n
+		reg.Register(name+"_tool@v1", bundle.ToolSignature{}, ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
+			executed = append(executed, name)
+			return map[string]any{"out": name}, nil
+		}))
+	}
+	b := makeLinearBundle(t, "first", "second", "last")
+	b.Manifest.BundleVersion = "2.0.0"
+
+	// Run and stop after first; capture checkpoint.
+	var capturedSnap Snapshot
+	_, err := RunFlow(context.Background(), b, map[string]any{}, reg, nil, &RunFlowOptions{
+		StopAfter: "first",
+		OnCheckpoint: func(s Snapshot) error {
+			capturedSnap = s
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("first RunFlow error: %v", err)
+	}
+	if len(executed) != 1 || executed[0] != "first" {
+		t.Fatalf("expected only first to execute, got %v", executed)
+	}
+
+	// Resume from snapshot; first should not re-execute.
+	executed = nil
+	capturedSnap.Frontier = []string{"second"} // restore frontier since StopAfter clears it
+	out, err := RunFlowResume(context.Background(), b, capturedSnap, reg, nil, nil)
+	if err != nil {
+		t.Fatalf("RunFlowResume error: %v", err)
+	}
+	for _, n := range executed {
+		if n == "first" {
+			t.Fatal("'first' ran again on resume")
+		}
+	}
+	if indexOf(executed, "second") < 0 || indexOf(executed, "last") < 0 {
+		t.Fatalf("expected second and last to execute on resume, got %v", executed)
+	}
+	if out == nil {
+		t.Error("expected non-nil output")
+	}
+}
+
+func TestRunFlowResume_VersionMismatch(t *testing.T) {
+	b := makeLinearBundle(t, "first")
+	b.Manifest.BundleVersion = "1.0.0"
+
+	snap := Snapshot{
+		RunID:         "abc",
+		BundleVersion: "2.0.0", // mismatch
+		FlowRef:       b.Manifest.Entry,
+	}
+	_, err := RunFlowResume(context.Background(), b, snap, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for version mismatch, got nil")
+	}
+}
+
+func TestRunFlowResume_FlowRefMismatch(t *testing.T) {
+	b := makeLinearBundle(t, "first")
+	b.Manifest.BundleVersion = "1.0.0"
+
+	snap := Snapshot{
+		RunID:         "abc",
+		BundleVersion: "1.0.0",
+		FlowRef:       "other@v1", // mismatch
+	}
+	_, err := RunFlowResume(context.Background(), b, snap, nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for flow ref mismatch, got nil")
+	}
+}
+
+func TestSnapshotRoundTrip_FileValue(t *testing.T) {
+	fv := FileValue{
+		Name:      "report.pdf",
+		Data:      []byte{0x25, 0x50, 0x44, 0x46}, // %PDF
+		MediaType: "application/pdf",
+	}
+	img := ToolImageOutput{
+		Data:      []byte{0x89, 0x50, 0x4e, 0x47}, // PNG header
+		MediaType: "image/png",
+	}
+	m := map[string]any{
+		"file":  fv,
+		"image": img,
+		"plain": "hello",
+		"nested": map[string]any{
+			"inner": fv,
+		},
+	}
+
+	marshaled := marshalAnyMap(m)
+	unmarshaled := unmarshalAnyMap(marshaled)
+
+	gotFV, ok := unmarshaled["file"].(FileValue)
+	if !ok {
+		t.Fatalf("file: expected FileValue, got %T", unmarshaled["file"])
+	}
+	if gotFV.Name != fv.Name || gotFV.MediaType != fv.MediaType || string(gotFV.Data) != string(fv.Data) {
+		t.Errorf("FileValue round-trip failed: got %+v, want %+v", gotFV, fv)
+	}
+
+	gotImg, ok := unmarshaled["image"].(ToolImageOutput)
+	if !ok {
+		t.Fatalf("image: expected ToolImageOutput, got %T", unmarshaled["image"])
+	}
+	if gotImg.MediaType != img.MediaType || string(gotImg.Data) != string(img.Data) {
+		t.Errorf("ToolImageOutput round-trip failed: got %+v, want %+v", gotImg, img)
+	}
+
+	if unmarshaled["plain"] != "hello" {
+		t.Errorf("plain: got %v", unmarshaled["plain"])
+	}
+
+	nested, ok := unmarshaled["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested: expected map, got %T", unmarshaled["nested"])
+	}
+	gotInner, ok := nested["inner"].(FileValue)
+	if !ok {
+		t.Fatalf("nested.inner: expected FileValue, got %T", nested["inner"])
+	}
+	if string(gotInner.Data) != string(fv.Data) {
+		t.Errorf("nested FileValue round-trip failed")
+	}
+}
+
 // --- helpers ---
 
 func sliceEq(a, b []string) bool {
