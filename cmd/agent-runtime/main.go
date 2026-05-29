@@ -60,6 +60,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --from <node>                                   start execution from this node (partial run)")
 	fmt.Fprintln(os.Stderr, "  --to <node>                                     stop execution after this node (partial run)")
 	fmt.Fprintln(os.Stderr, "  --seed <file>                                   JSON file with pre-seeded node outputs ({\"seed_outputs\":{...}})")
+	fmt.Fprintln(os.Stderr, "  --checkpoint <file>                             atomically write a snapshot after every node")
+	fmt.Fprintln(os.Stderr, "  --resume <file>                                 resume from a checkpoint snapshot (replaces --input/--from/--seed)")
 }
 
 func cmdValidate(args []string) {

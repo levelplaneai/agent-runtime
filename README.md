@@ -34,7 +34,38 @@ agent-runtime run ./my_agent.agent --tool supplier_api.get_price@v1=https://api.
 
 # Register a stub tool (for testing)
 agent-runtime run ./my_agent.agent --tool supplier_api.get_price@v1='{"price": 42.0}'
+
+# Run only a subset of the flow
+agent-runtime run ./my_agent.agent --from extract_node --to summarize_node
+
+# Pre-seed a node's output and skip re-running it
+agent-runtime run ./my_agent.agent --seed outputs.json
+
+# Save a checkpoint snapshot after every node (atomic write)
+agent-runtime run ./my_agent.agent --checkpoint /tmp/run.snap
+
+# Resume from a checkpoint (picks up where the run left off)
+agent-runtime run ./my_agent.agent --resume /tmp/run.snap
 ```
+
+## Checkpoint & resume
+
+Any run can be made resumable by adding `--checkpoint <file>`. After each node completes the runtime atomically writes a JSON snapshot to that file. If the run is interrupted — crash, timeout, manual cancellation — call the same command with `--resume <snapshot>` instead of `--input` flags and execution picks up from the last saved node.
+
+For agentic `prompt` nodes the checkpoint also captures mid-loop state (the full message history and current tool-use iteration), so an interrupted tool-use loop resumes from the right iteration rather than re-running from the beginning.
+
+```sh
+# Long-running flow; save state after each step
+agent-runtime run ./pipeline.agent --input query="…" --checkpoint /tmp/pipeline.snap
+
+# Interrupted? Resume without re-running completed nodes
+agent-runtime run ./pipeline.agent --resume /tmp/pipeline.snap
+
+# Resume and stop early
+agent-runtime run ./pipeline.agent --resume /tmp/pipeline.snap --to review_node
+```
+
+`--resume` cannot be combined with `--input`, `--from`, or `--seed` (those values are stored inside the snapshot).
 
 ## Environment variables
 

@@ -306,6 +306,34 @@ A change is always a deliberate two- or three-step operation: create the new ver
 
 ---
 
+## Partial execution
+
+The CLI supports running only a slice of a flow and seeding node outputs from a file. These flags are useful for development, testing, and resuming interrupted runs.
+
+| Flag | Purpose |
+|------|---------|
+| `--from <node>` | Start execution at this node instead of the flow entry |
+| `--to <node>` | Stop after this node completes (skip the rest of the flow) |
+| `--seed <file>` | Pre-populate node outputs from a JSON file before execution starts |
+| `--checkpoint <file>` | Atomically write a snapshot after every node |
+| `--resume <file>` | Resume a previously checkpointed run |
+
+**`--seed` file format:**
+```json
+{
+  "seed_outputs": {
+    "fetch_data": { "result": "cached result" },
+    "extract_items": { "items": ["a", "b"] }
+  }
+}
+```
+
+**Checkpoint & resume** — `--checkpoint` fires after each node boundary and, for agentic `prompt` nodes that use tools, after each tool-use iteration as well. The snapshot records full message history so a mid-loop interruption resumes at the right iteration without replaying earlier tool calls.
+
+`--resume` is incompatible with `--input`, `--from`, and `--seed` (the snapshot already contains that state). `--to` is allowed with `--resume` to stop a resumed run early.
+
+---
+
 ## Validation checklist
 
 Before running, the runtime checks:
