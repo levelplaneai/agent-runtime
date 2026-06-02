@@ -1,0 +1,20 @@
+{
+  "description": "Crops dimension callout bounding boxes from each view's cropped image. Returns all dims JSON and per-feature dim crop paths.",
+  "timeout_seconds": 120,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "views": { "type": "string" },
+      "phase4_results": { "type": "string", "description": "JSON array of per-view dimension arrays from map_phase4" },
+      "output_dir": { "type": "string" }
+    },
+    "required": ["views", "phase4_results", "output_dir"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "all_dims_json": { "type": "string" },
+      "dim_data_by_feature": { "type": "object" }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "type": "prompt",
+  "description": "Detect and define bounding boxes for all views in the drawing on a 0-1000 scale",
+  "inputs": {
+    "drawing": { "from": "$.inputs.drawing", "type": "file_path" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 16000
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "views": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "viewName": { "type": "string" },
+            "ymin": { "type": "number" },
+            "xmin": { "type": "number" },
+            "ymax": { "type": "number" },
+            "xmax": { "type": "number" }
+          },
+          "required": ["viewName", "ymin", "xmin", "ymax", "xmax"]
+        }
+      }
+    },
+    "required": ["views"]
+  },
+  "on_error": "retry:2"
+}

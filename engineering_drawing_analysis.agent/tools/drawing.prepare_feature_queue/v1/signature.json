@@ -1,0 +1,17 @@
+{
+  "description": "Extracts a deduplicated ordered list of unique feature names from the phase4 dimension data to seed the phase5 verification loop.",
+  "timeout_seconds": 30,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "all_dims_json": { "type": "string", "description": "JSON string of all dimension entries from crop_dims" }
+    },
+    "required": ["all_dims_json"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "feature_names": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

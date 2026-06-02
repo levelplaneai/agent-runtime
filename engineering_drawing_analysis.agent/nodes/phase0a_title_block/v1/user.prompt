@@ -1,0 +1,15 @@
+Extract ALL text from the title block and every general note on this drawing. Include every field without exception:
+- Part number, part name, drawing number, revision level
+- Material specification (alloy, grade, condition/temper, standard e.g. AMS/ASTM/EN)
+- General tolerances: linear (e.g. ±0.1 for 2-place decimals), angular
+- Surface finish: general Ra/Rz callout, any surface texture symbols in the title block
+- Heat treatment, case hardening depth, hardness requirements (HRC/HB/HV)
+- Plating, coating, anodising, painting specifications
+- Weight, scale, sheet size, number of sheets
+- Projection standard (first-angle / third-angle / ISO / ASME)
+- Drawing standard (ASME Y14.5, ISO 1101, BS 8888, etc.)
+- Fits and limits notation if stated in the title block or notes (e.g. H7/g6)
+- Datum reference frame callouts if defined in the title block
+- Approved materials list note or restricted materials callout
+- Every numbered or lettered note on the drawing, verbatim
+Zoom in to read fine print. Return all text verbatim, organised by section, as a single string in the "text" field.

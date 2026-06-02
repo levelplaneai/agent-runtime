@@ -57,6 +57,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `  --tool name@version                             register a stub tool that returns {}`)
 	fmt.Fprintln(os.Stderr, "  --data-dir <path>                               SDK mode: stream events to stdout and persist run to <path>/runs/<run-id>/")
 	fmt.Fprintln(os.Stderr, "  --run-id <id>                                   run identifier (required with --data-dir)")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "exec tools (bundled, no server required):")
+	fmt.Fprintln(os.Stderr, "  tools/<name>/v1/exec.py                         auto-registered; receives args as JSON on stdin, writes result JSON to stdout")
+	fmt.Fprintln(os.Stderr, "  tools/<name>/v1/exec.sh                         same protocol for shell scripts")
+	fmt.Fprintln(os.Stderr, `  signature.json "exec" field                     overrides the default 'python3 exec.py' / 'bash exec.sh' command`)
 	fmt.Fprintln(os.Stderr, "  --from <node>                                   start execution from this node (partial run)")
 	fmt.Fprintln(os.Stderr, "  --to <node>                                     stop execution after this node (partial run)")
 	fmt.Fprintln(os.Stderr, "  --seed <file>                                   JSON file with pre-seeded node outputs ({\"seed_outputs\":{...}})")
@@ -117,6 +122,14 @@ func cmdRun(args []string) {
 	}
 
 	reg := runtime.NewRegistry()
+
+	// Auto-register exec tools declared in the bundle (exec.py / exec.sh or
+	// signature.exec field). Explicit --tool flags registered afterwards take
+	// precedence, so a developer can still override a bundled tool with an HTTP
+	// stub during testing.
+	for _, e := range bundleExecTools(b) {
+		reg.Register(e.ref, e.sig, runtime.NewExecTool(e.cmd, e.dir))
+	}
 	for ref, tool := range flags.tools {
 		reg.Register(ref, bundle.ToolSignature{}, tool)
 	}
@@ -662,6 +675,59 @@ func collectMissingKeys(b *bundle.Bundle) []missingKeyInfo {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].envVar < result[j].envVar })
 	return result
+}
+
+// execToolEntry holds the data needed to register one exec tool.
+type execToolEntry struct {
+	ref string
+	sig bundle.ToolSignature
+	cmd string
+	dir string
+}
+
+// bundleExecTools returns one entry for every tool in the bundle that has a
+// bundled implementation — either via signature.exec or by the presence of an
+// exec.py or exec.sh file in the tool's version directory.
+//
+// The returned entries can be registered before --tool flags so that explicit
+// flags take precedence (allowing stub/HTTP overrides during testing).
+func bundleExecTools(b *bundle.Bundle) []execToolEntry {
+	var entries []execToolEntry
+	for toolName, versions := range b.Tools {
+		for version, sig := range versions {
+			ref := toolName + "@" + version
+			toolDir := filepath.Join(b.Path, "tools", toolName, version)
+			cmd := resolveExecCommand(sig, toolDir)
+			if cmd == "" {
+				continue
+			}
+			entries = append(entries, execToolEntry{
+				ref: ref,
+				sig: sig,
+				cmd: cmd,
+				dir: toolDir,
+			})
+		}
+	}
+	return entries
+}
+
+// resolveExecCommand returns the command to run for a tool, or "" if none is
+// available. Priority: signature.exec field > exec.py > exec.sh in the tool dir.
+func resolveExecCommand(sig bundle.ToolSignature, toolDir string) string {
+	if sig.Exec != "" {
+		return sig.Exec
+	}
+	for _, candidate := range []string{"exec.py", "exec.sh"} {
+		full := filepath.Join(toolDir, candidate)
+		if info, err := os.Stat(full); err == nil && !info.IsDir() {
+			if candidate == "exec.py" {
+				return "python3 " + candidate
+			}
+			return "bash " + candidate
+		}
+	}
+	return ""
 }
 
 // buildProviderRegistry creates a ProviderRegistry populated from environment variables.

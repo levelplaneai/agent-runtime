@@ -1,0 +1,28 @@
+{
+  "description": "Loads a drawing (PDF or image) as a raster image and crops all detected view regions, saving each as a PNG. Returns an array of {name, path} objects.",
+  "timeout_seconds": 120,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "drawing_path": { "type": "string", "description": "Absolute path to the drawing file (PDF or image)" },
+      "view_boxes": { "type": "string", "description": "JSON array of view bounding boxes from phase2a" },
+      "output_dir": { "type": "string", "description": "Directory to write crop PNG files" }
+    },
+    "required": ["drawing_path", "view_boxes", "output_dir"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "views": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "path": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "type": "prompt",
+  "description": "Emit a human-readable error message when the drawing is out of scope for this bundle",
+  "inputs": {
+    "routing": { "from": "$.phase0c_type.output.routing" }
+  },
+  "config": {
+    "model": "anthropic/claude-sonnet-4-6",
+    "user": "Drawing classified as '{{ routing }}'. This bundle only supports process_operation drawings (single machined parts). Analysis halted."
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "message": { "type": "string" }
+    },
+    "required": ["message"]
+  }
+}

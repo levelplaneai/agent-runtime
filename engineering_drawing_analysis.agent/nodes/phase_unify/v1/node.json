@@ -1,0 +1,56 @@
+{
+  "type": "prompt",
+  "description": "Unify features across views, calculate overall envelope bottom-up, and produce 3D part understanding",
+  "inputs": {
+    "views": { "from": "$.crop_views.output.views" },
+    "contributing": { "from": "$.build_feature_split.output.contributing" },
+    "non_contributing": { "from": "$.build_feature_split.output.non_contributing" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 65536,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "image_sequence", "input": "views", "label": "View Name: {{ name }}", "image_key": "path" },
+          { "type": "text", "value": "--- Extracted Features, Dimensions, and Envelope Impacts (Step 5 & 6) ---\n-- CONTRIBUTING FEATURES --\n{{ contributing }}\n-- NON-CONTRIBUTING FEATURES --\n{{ non_contributing }}\n\nStep 8A: View Unification & Implicit Dimensions.\nYou are a Senior Metrologist and Expert Mechanical Design Engineer. Your intelligence, logical deduction, and spatial reasoning must be flawless. You MUST use your vision capabilities to precisely examine the drawing.\n\nYou are provided with a complete list of all extracted features and dimensions from previous steps. Many of these atomic features extracted from different views actually represent the SAME physical geometric feature on the part (e.g. 'Main Bore - Front View' and 'Main Bore - Top View').\n\nYOUR TASK:\n1. VIEW UNIFICATION & ATOMIC PRESERVATION: Analyze all provided atomic features and logically merge features ONLY IF they are EXACTLY the same physical feature across different views.\nCRITICAL MANDATE - DRAFTING DECODING: You must pay extreme attention to standard engineering drafting line-types.\n- Continuous/Visible, thick lines = solid outer physical boundary.\n- Dashed/Hidden, thin lines = internal voids, hidden features, or pockets beneath the surface.\n- Chain/Center lines = axes of symmetry or centers of holes.\nCRITICAL MANDATE - NO OVER-MERGING AND STRICT DE-PLURALIZATION: You are STRICTLY FORBIDDEN from merging distinct physical features into general categories. If there are multiple bores, grooves, steps, or similar repetitive features (e.g. \"8x Ø5 holes\" or \"3 Grooves\"), you MUST break them down into INDIVIDUAL atomic feature entries (e.g., Hole 1, Hole 2, ... Hole 8). YOU MUST EXTRACT EACH & EVERY FEATURE INDIVIDUALLY. DO NOT combine them into generalized groups.\nCRITICAL RULE: YOU MUST ENSURE THAT ABSOLUTELY EVERY SINGLE MINOR FEATURE DETECTED IN STEP 4 AND 5 IS MAPPED HERE AT AN ATOMIC LEVEL.\n\n2. DIMENSIONS: For EACH TRUE ATOMIC PHYSICAL FEATURE, comprehensively list every single dimension, tolerance, and GD&T callout associated with it. Resolve implicit dimensions: derive any dimension computable from known values, note as \"(Derived)\".\n\n3. SPATIAL ANALYSIS: For each true atomic physical feature, perform rigorous spatial analysis:\n   - Does this feature actually exist geometrically? (existsAsPhysicalFeature: BOOLEAN)\n   - Does this feature physically extend or define the absolute maximum bounding box envelope? (impactsEnvelope: \"YES\", \"NO\", or \"MAYBE\")\n   - Which 3D axes does this feature associate with or impact? (associatedAxes: \"Length\", \"Breadth\", \"Height\", \"None\")\n   - Provide explicit reasoning.\n\n4. OVERALL ENVELOPE CALCULATION:\n   CRITICAL DIMENSIONING INSTRUCTION:\n   You must perform strict bottom-up dimension deduction for all envelope calculations.\n   IGNORE OVERALLS: You must completely ignore and discard any extracted features, measurements, or variables from the drawing that contain the words \"overall\", \"total\", or imply a macroscopic boundary, for your primary calculations.\n   BOTTOM-UP ONLY: Calculate the final envelope dimensions strictly by aggregating, stacking, and summing the sizes of the individual unified features.\n   STRICT CALCULATION RULE: YOU MUST EXPLICITLY SHOW ARITHMETIC EQUATIONS for every path.\n   NO UNKNOWNS ALLOWED: If a dimension is not explicitly called out, you MUST calculate or assume it. If assumed, append \"(Assumed)\" and explain.\n\nMANDATORY 3D UNDERSTANDING RECORDING: Before making final envelope conclusions, you MUST provide an \"overall3DPartUnderstanding\" statement describing what the part looks like in 3D and how features interact to form the physical boundaries.\n\nMANDATORY FEATURE COMPLETENESS CHECK: You MUST provide a 'completenessCheck' statement explaining how you ensured that absolutely EVERY single atomic feature from the input context was mapped into the unifiedAtomicFeatures list without any being lost.\n\nREQUIRED OUTPUTS (JSON object):\n1. unifiedAtomicFeatures: array of objects with {featureName, originalFeatureNames, dimensions, existsAsPhysicalFeature, impactsEnvelope, associatedAxes, reasoning}.\n2. overallDimensions: {length, breadth, height} where each axis is {paths: [{description, dimensionsUsed, steps, result, confidence}], finalValue, reasoning}.\n3. overall3DPartUnderstanding: paragraph describing the complete 3D geometry.\n4. completenessCheck: completeness statement." }
+        ]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "unifiedAtomicFeatures": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "featureName": { "type": "string" },
+            "originalFeatureNames": { "type": "array", "items": { "type": "string" } },
+            "dimensions": { "type": "array", "items": { "type": "string" } },
+            "existsAsPhysicalFeature": { "type": "boolean" },
+            "impactsEnvelope": { "type": "string", "enum": ["YES", "NO", "MAYBE"] },
+            "associatedAxes": { "type": "array", "items": { "type": "string" } },
+            "reasoning": { "type": "string" }
+          },
+          "required": ["featureName", "originalFeatureNames", "dimensions", "existsAsPhysicalFeature", "impactsEnvelope", "associatedAxes", "reasoning"]
+        }
+      },
+      "overallDimensions": {
+        "type": "object",
+        "properties": {
+          "length": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] },
+          "breadth": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] },
+          "height": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] }
+        },
+        "required": ["length", "breadth", "height"]
+      },
+      "overall3DPartUnderstanding": { "type": "string" },
+      "completenessCheck": { "type": "string" }
+    },
+    "required": ["unifiedAtomicFeatures", "overallDimensions", "overall3DPartUnderstanding", "completenessCheck"]
+  },
+  "on_error": "retry:2"
+}

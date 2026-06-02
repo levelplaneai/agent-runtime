@@ -1,0 +1,10 @@
+{
+  "type": "map",
+  "description": "Run atomic feature extraction on each cropped view in sequence",
+  "config": {
+    "over": "$.crop_views.output.views",
+    "as": "view",
+    "do": "phase3_per_view",
+    "concurrency": 1
+  }
+}

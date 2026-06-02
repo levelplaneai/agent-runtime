@@ -1,0 +1,16 @@
+{
+  "bundle_version": "0.2.0",
+  "runtime_version": "0.1",
+  "name": "engineering_drawing_analysis",
+  "description": "Multi-phase analysis of machined single-part engineering drawings. Extracts geometry, features, dimensions, tolerances, spatial relationships, and a reconciliation graph.",
+  "entry": "main@v1",
+  "tools_required": [
+    "image.crop_views@v1",
+    "image.crop_features@v1",
+    "image.crop_dims@v1",
+    "drawing.prepare_feature_queue@v1",
+    "drawing.verify_feature@v1",
+    "drawing.build_feature_split@v1",
+    "drawing.reconciliation_graph@v1"
+  ]
+}
