@@ -52,12 +52,6 @@ type ToolSignature struct {
 	InputSchema    json.RawMessage `json:"input_schema"`
 	OutputSchema   json.RawMessage `json:"output_schema"`
 	TimeoutSeconds int             `json:"timeout_seconds,omitempty"` // 0 = use default (30 s)
-	// Exec, when non-empty, is the command the runtime runs to execute this tool
-	// (e.g. "python3 exec.py"). The command runs with the tool's version directory
-	// as its working directory. Args are written as JSON to stdin; the result is
-	// read as JSON from stdout. If Exec is empty, the runtime also checks for an
-	// exec.py or exec.sh file in the tool's version directory automatically.
-	Exec string `json:"exec,omitempty"`
 }
 
 // Bundle is the fully loaded in-memory representation of a .agent directory.
