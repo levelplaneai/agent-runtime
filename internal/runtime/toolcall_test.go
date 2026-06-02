@@ -255,3 +255,121 @@ func TestResolveNodeInputs_FilePathBinding(t *testing.T) {
 		}
 	})
 }
+
+// --- Gap 1: file_path_array binding ---
+
+func TestResolveNodeInputs_FilePathArray(t *testing.T) {
+	dir := t.TempDir()
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+
+	path1 := filepath.Join(dir, "front.png")
+	path2 := filepath.Join(dir, "top.png")
+	for _, p := range []string{path1, path2} {
+		if err := os.WriteFile(p, pngMagic, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	node := makeNode(t, `{
+		"type": "prompt",
+		"inputs": {
+			"crops": { "from": "$.inputs.paths", "type": "file_path_array" }
+		},
+		"config": {"model": "stub/stub", "user": "analyze"}
+	}`)
+
+	execCtx := NewExecutionContext(map[string]any{
+		"paths": []any{path1, path2},
+	})
+
+	resolved, err := resolveNodeInputs(node, execCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	fvs, ok := resolved["crops"].([]FileValue)
+	if !ok {
+		t.Fatalf("expected []FileValue, got %T", resolved["crops"])
+	}
+	if len(fvs) != 2 {
+		t.Fatalf("expected 2 FileValues, got %d", len(fvs))
+	}
+	for i, fv := range fvs {
+		if fv.MediaType != "image/png" {
+			t.Errorf("fvs[%d]: expected image/png, got %q", i, fv.MediaType)
+		}
+	}
+}
+
+func TestResolveNodeInputs_FilePathArray_NonArrayError(t *testing.T) {
+	node := makeNode(t, `{
+		"type": "prompt",
+		"inputs": {
+			"crops": { "from": "$.inputs.not_array", "type": "file_path_array" }
+		},
+		"config": {"model": "stub/stub", "user": "analyze"}
+	}`)
+
+	execCtx := NewExecutionContext(map[string]any{"not_array": "single_string"})
+	_, err := resolveNodeInputs(node, execCtx)
+	if err == nil {
+		t.Error("expected error for non-array value with file_path_array binding")
+	}
+}
+
+// --- Gap 4: tool timeout from signature ---
+
+func TestExecuteToolCall_TimeoutFromSignature(t *testing.T) {
+	reg := NewRegistry()
+	// Register a tool that checks whether its context has a deadline.
+	deadlineTool := ToolFunc(func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+		_, hasDeadline := ctx.Deadline()
+		return map[string]any{"has_deadline": hasDeadline}, nil
+	})
+	sig := bundle.ToolSignature{TimeoutSeconds: 60}
+	if err := reg.Register("deadline_check@v1", sig, deadlineTool); err != nil {
+		t.Fatal(err)
+	}
+
+	node := makeNode(t, `{
+		"type": "tool_call",
+		"inputs": {},
+		"config": {"tool": "deadline_check@v1"}
+	}`)
+
+	execCtx := NewExecutionContext(map[string]any{})
+	out, err := ExecuteToolCall(context.Background(), node, execCtx, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out["has_deadline"] != true {
+		t.Errorf("expected context deadline to be set when TimeoutSeconds > 0, got: %v", out["has_deadline"])
+	}
+}
+
+func TestExecuteToolCall_NoTimeoutWhenZero(t *testing.T) {
+	reg := NewRegistry()
+	deadlineTool := ToolFunc(func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+		_, hasDeadline := ctx.Deadline()
+		return map[string]any{"has_deadline": hasDeadline}, nil
+	})
+	sig := bundle.ToolSignature{TimeoutSeconds: 0} // no timeout
+	if err := reg.Register("nodeadline@v1", sig, deadlineTool); err != nil {
+		t.Fatal(err)
+	}
+
+	node := makeNode(t, `{
+		"type": "tool_call",
+		"inputs": {},
+		"config": {"tool": "nodeadline@v1"}
+	}`)
+
+	execCtx := NewExecutionContext(map[string]any{})
+	out, err := ExecuteToolCall(context.Background(), node, execCtx, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out["has_deadline"] != false {
+		t.Errorf("expected no context deadline when TimeoutSeconds == 0, got: %v", out["has_deadline"])
+	}
+}

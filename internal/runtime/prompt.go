@@ -354,6 +354,12 @@ func buildCompletionRequest(
 		Model:     model,
 		MaxTokens: 16000,
 	}
+	if raw, ok := node.Config["max_tokens"]; ok {
+		var mt int
+		if err := json.Unmarshal(raw, &mt); err == nil && mt > 0 {
+			req.MaxTokens = mt
+		}
+	}
 
 	// --- System prompt ---
 	systemText, err := resolveText(node.Config, "system", filepath.Join(nodeDir, "system.prompt"))
@@ -431,7 +437,8 @@ func buildMessages(
 	return []Message{{Role: "user", Blocks: blocks}}, nil
 }
 
-// collectFileBlocks extracts FileValue and ToolImageOutput inputs and returns them as ContentBlocks.
+// collectFileBlocks extracts FileValue, []FileValue, and ToolImageOutput inputs
+// and returns them as ContentBlocks. []FileValue comes from "file_path_array" bindings.
 func collectFileBlocks(inputs map[string]any) []ContentBlock {
 	var blocks []ContentBlock
 	for _, v := range inputs {
@@ -446,6 +453,18 @@ func collectFileBlocks(inputs map[string]any) []ContentBlock {
 				Data:      tv.Data,
 				MediaType: tv.MediaType,
 			})
+		case []FileValue:
+			for _, fv := range tv {
+				kind := "document"
+				if strings.HasPrefix(fv.MediaType, "image/") {
+					kind = "image"
+				}
+				blocks = append(blocks, ContentBlock{
+					Type:      kind,
+					Data:      fv.Data,
+					MediaType: fv.MediaType,
+				})
+			}
 		case ToolImageOutput:
 			blocks = append(blocks, ContentBlock{
 				Type:      "image",
@@ -503,29 +522,193 @@ func sanitizeOutputForTrace(output map[string]any) map[string]any {
 	return result
 }
 
+// contentItemConfig is one entry in a config.messages[*].content array.
+// content can be either a plain string (rendered as a single text block) or an
+// array of contentItemConfig objects that explicitly control block ordering and
+// allow interleaving text labels with specific images.
+type contentItemConfig struct {
+	Type     string `json:"type"`      // "text" | "image" | "image_sequence"
+	Value    string `json:"value"`     // "text": template rendered against all inputs
+	Input    string `json:"input"`     // "image" / "image_sequence": key in resolved inputs
+	Label    string `json:"label"`     // "image_sequence": template rendered per item; item fields available as {{ field }}
+	ImageKey string `json:"image_key"` // "image_sequence" with []any items: field that holds the file path
+}
+
 // buildMultiTurnMessages parses a config.messages JSON array and renders templates.
+// Each message's "content" may be either a plain string (existing behaviour) or an
+// array of contentItemConfig objects for interleaved text+image payloads.
 func buildMultiTurnMessages(raw json.RawMessage, inputs map[string]any) ([]Message, error) {
-	var turns []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+	var rawTurns []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	}
-	if err := json.Unmarshal(raw, &turns); err != nil {
+	if err := json.Unmarshal(raw, &rawTurns); err != nil {
 		return nil, fmt.Errorf("config.messages must be an array of {role, content}: %w", err)
 	}
 
-	out := make([]Message, 0, len(turns))
-	for i, t := range turns {
-		rendered, err := Render(t.Content, inputs)
-		if err != nil {
-			return nil, fmt.Errorf("messages[%d]: %w", i, err)
-		}
+	out := make([]Message, 0, len(rawTurns))
+	for i, t := range rawTurns {
 		role := strings.ToLower(t.Role)
 		if role != "user" && role != "assistant" {
 			return nil, fmt.Errorf("messages[%d]: unknown role %q", i, t.Role)
 		}
-		out = append(out, Message{Role: role, Content: rendered})
+
+		// Detect whether content is a plain string or an array of content items.
+		var contentStr string
+		if err := json.Unmarshal(t.Content, &contentStr); err == nil {
+			// Plain string — existing single-text-block behaviour.
+			rendered, err := Render(contentStr, inputs)
+			if err != nil {
+				return nil, fmt.Errorf("messages[%d]: %w", i, err)
+			}
+			out = append(out, Message{Role: role, Content: rendered})
+			continue
+		}
+
+		// Array of content items — build explicit block sequence.
+		var items []contentItemConfig
+		if err := json.Unmarshal(t.Content, &items); err != nil {
+			return nil, fmt.Errorf("messages[%d]: content must be a string or an array of content items: %w", i, err)
+		}
+		blocks, err := buildContentBlocks(items, inputs)
+		if err != nil {
+			return nil, fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		out = append(out, Message{Role: role, Blocks: blocks})
 	}
 	return out, nil
+}
+
+// buildContentBlocks converts a content-item array into the ContentBlock slice
+// sent to the LLM. Three item types are supported:
+//
+//   - "text"           — Render(value, inputs) → text block.
+//   - "image"          — inputs[input] must be a FileValue → image/document block.
+//   - "image_sequence" — inputs[input] is []FileValue or []any. For each element:
+//     emit an optional rendered label text block, then an image block.
+//     For []any elements, image_key names the field that holds the file path;
+//     all other string fields are exposed as {{ key }} in the label template.
+func buildContentBlocks(items []contentItemConfig, inputs map[string]any) ([]ContentBlock, error) {
+	var blocks []ContentBlock
+	for idx, item := range items {
+		switch item.Type {
+		case "text":
+			rendered, err := Render(item.Value, inputs)
+			if err != nil {
+				return nil, fmt.Errorf("content[%d] text: %w", idx, err)
+			}
+			blocks = append(blocks, ContentBlock{Type: "text", Text: rendered})
+
+		case "image":
+			val, ok := inputs[item.Input]
+			if !ok {
+				return nil, fmt.Errorf("content[%d] image: input %q not found", idx, item.Input)
+			}
+			fv, ok := val.(FileValue)
+			if !ok {
+				return nil, fmt.Errorf("content[%d] image: input %q must be a FileValue (use \"type\": \"file_path\" on the input binding), got %T", idx, item.Input, val)
+			}
+			kind := "document"
+			if strings.HasPrefix(fv.MediaType, "image/") {
+				kind = "image"
+			}
+			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+
+		case "image_sequence":
+			val, ok := inputs[item.Input]
+			if !ok {
+				return nil, fmt.Errorf("content[%d] image_sequence: input %q not found", idx, item.Input)
+			}
+			seqBlocks, err := buildImageSequenceBlocks(item, val, inputs)
+			if err != nil {
+				return nil, fmt.Errorf("content[%d] image_sequence: %w", idx, err)
+			}
+			blocks = append(blocks, seqBlocks...)
+
+		default:
+			return nil, fmt.Errorf("content[%d]: unknown type %q (want \"text\", \"image\", or \"image_sequence\")", idx, item.Type)
+		}
+	}
+	return blocks, nil
+}
+
+// buildImageSequenceBlocks handles the "image_sequence" content item.
+// It accepts either a []FileValue (already loaded by "file_path_array" binding) or
+// a []any of objects, loading each image path from item[image_key] on the fly.
+func buildImageSequenceBlocks(cfg contentItemConfig, val any, globalInputs map[string]any) ([]ContentBlock, error) {
+	switch seq := val.(type) {
+	case []FileValue:
+		var blocks []ContentBlock
+		for _, fv := range seq {
+			if cfg.Label != "" {
+				// Expose the filename as {{ name }} in the label template.
+				itemInputs := mergeItemInputs(globalInputs, map[string]any{"name": fv.Name})
+				rendered, err := Render(cfg.Label, itemInputs)
+				if err != nil {
+					return nil, fmt.Errorf("rendering label: %w", err)
+				}
+				blocks = append(blocks, ContentBlock{Type: "text", Text: rendered})
+			}
+			kind := "document"
+			if strings.HasPrefix(fv.MediaType, "image/") {
+				kind = "image"
+			}
+			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+		}
+		return blocks, nil
+
+	case []any:
+		if cfg.ImageKey == "" {
+			return nil, fmt.Errorf("image_key is required when input is an array of objects")
+		}
+		var blocks []ContentBlock
+		for i, elem := range seq {
+			obj, ok := elem.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("item[%d] must be an object, got %T", i, elem)
+			}
+			// Render label with item fields exposed as top-level {{ key }} variables.
+			if cfg.Label != "" {
+				itemInputs := mergeItemInputs(globalInputs, obj)
+				rendered, err := Render(cfg.Label, itemInputs)
+				if err != nil {
+					return nil, fmt.Errorf("item[%d]: rendering label: %w", i, err)
+				}
+				blocks = append(blocks, ContentBlock{Type: "text", Text: rendered})
+			}
+			// Load the image from the path stored under image_key.
+			pathRaw, exists := obj[cfg.ImageKey]
+			if !exists {
+				return nil, fmt.Errorf("item[%d]: image_key %q not found in object", i, cfg.ImageKey)
+			}
+			fv, err := loadFileValue(pathRaw)
+			if err != nil {
+				return nil, fmt.Errorf("item[%d]: loading image: %w", i, err)
+			}
+			kind := "document"
+			if strings.HasPrefix(fv.MediaType, "image/") {
+				kind = "image"
+			}
+			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+		}
+		return blocks, nil
+
+	default:
+		return nil, fmt.Errorf("input must be []FileValue or []any (array of objects), got %T", val)
+	}
+}
+
+// mergeItemInputs returns a new map that contains all keys from global followed
+// by all keys from item, so item fields shadow global inputs in templates.
+func mergeItemInputs(global, item map[string]any) map[string]any {
+	merged := make(map[string]any, len(global)+len(item))
+	for k, v := range global {
+		merged[k] = v
+	}
+	for k, v := range item {
+		merged[k] = v
+	}
+	return merged
 }
 
 // resolveText returns the text for a prompt component. It checks the config key

@@ -318,6 +318,226 @@ func TestSanitizeOutputForTrace_PassthroughNonImage(t *testing.T) {
 	}
 }
 
+// --- Gap 1: []FileValue in collectFileBlocks ---
+
+func TestCollectFileBlocks_FileValueSlice(t *testing.T) {
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	inputs := map[string]any{
+		"crops": []FileValue{
+			{Name: "front.png", Data: pngMagic, MediaType: "image/png"},
+			{Name: "top.png", Data: pngMagic, MediaType: "image/png"},
+		},
+	}
+	blocks := collectFileBlocks(inputs)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 image blocks from []FileValue, got %d", len(blocks))
+	}
+	for i, b := range blocks {
+		if b.Type != "image" {
+			t.Errorf("block[%d]: expected type=image, got %q", i, b.Type)
+		}
+		if b.MediaType != "image/png" {
+			t.Errorf("block[%d]: expected image/png, got %q", i, b.MediaType)
+		}
+	}
+}
+
+func TestCollectFileBlocks_SingleFileValue(t *testing.T) {
+	inputs := map[string]any{
+		"doc": FileValue{Name: "spec.pdf", Data: []byte("%PDF"), MediaType: "application/pdf"},
+	}
+	blocks := collectFileBlocks(inputs)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	if blocks[0].Type != "document" {
+		t.Errorf("expected type=document for PDF, got %q", blocks[0].Type)
+	}
+}
+
+// --- Gap 2: content-array messages ---
+
+func TestBuildMultiTurnMessages_StringContent(t *testing.T) {
+	turns := []map[string]any{
+		{"role": "user", "content": "Hello {{ name }}"},
+	}
+	raw, _ := json.Marshal(turns)
+	msgs, err := buildMultiTurnMessages(raw, map[string]any{"name": "World"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "Hello World" {
+		t.Errorf("unexpected messages: %v", msgs)
+	}
+}
+
+func TestBuildMultiTurnMessages_ContentArray_TextAndImage(t *testing.T) {
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	inputs := map[string]any{
+		"drawing": FileValue{Name: "draw.png", Data: pngMagic, MediaType: "image/png"},
+	}
+	turns := []map[string]any{
+		{"role": "user", "content": []map[string]any{
+			{"type": "text", "value": "Original Diagram:"},
+			{"type": "image", "input": "drawing"},
+		}},
+	}
+	raw, _ := json.Marshal(turns)
+	msgs, err := buildMultiTurnMessages(raw, inputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Blocks == nil {
+		t.Fatal("expected Blocks to be set for content-array message")
+	}
+	if len(msgs[0].Blocks) != 2 {
+		t.Fatalf("expected 2 blocks (text + image), got %d", len(msgs[0].Blocks))
+	}
+	if msgs[0].Blocks[0].Type != "text" || msgs[0].Blocks[0].Text != "Original Diagram:" {
+		t.Errorf("first block wrong: %+v", msgs[0].Blocks[0])
+	}
+	if msgs[0].Blocks[1].Type != "image" {
+		t.Errorf("second block should be image, got %q", msgs[0].Blocks[1].Type)
+	}
+}
+
+func TestBuildMultiTurnMessages_ContentArray_ImageSequence_FileValues(t *testing.T) {
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	inputs := map[string]any{
+		"crops": []FileValue{
+			{Name: "front.png", Data: pngMagic, MediaType: "image/png"},
+			{Name: "top.png", Data: pngMagic, MediaType: "image/png"},
+		},
+	}
+	turns := []map[string]any{
+		{"role": "user", "content": []map[string]any{
+			{"type": "image_sequence", "input": "crops", "label": "View: {{ name }}"},
+		}},
+	}
+	raw, _ := json.Marshal(turns)
+	msgs, err := buildMultiTurnMessages(raw, inputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Expect: [text "View: front.png", image, text "View: top.png", image]
+	if len(msgs[0].Blocks) != 4 {
+		t.Fatalf("expected 4 blocks (label+image per item), got %d: %+v", len(msgs[0].Blocks), msgs[0].Blocks)
+	}
+	if msgs[0].Blocks[0].Type != "text" {
+		t.Errorf("block[0] should be text label, got %q", msgs[0].Blocks[0].Type)
+	}
+	if msgs[0].Blocks[1].Type != "image" {
+		t.Errorf("block[1] should be image, got %q", msgs[0].Blocks[1].Type)
+	}
+}
+
+func TestBuildMultiTurnMessages_ContentArray_ImageSequence_Objects(t *testing.T) {
+	// Write a temp PNG so loadFileValue can read it.
+	dir := t.TempDir()
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	front := filepath.Join(dir, "front.png")
+	top := filepath.Join(dir, "top.png")
+	if err := os.WriteFile(front, pngMagic, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(top, pngMagic, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs := map[string]any{
+		"views": []any{
+			map[string]any{"name": "Front View", "path": front},
+			map[string]any{"name": "Top View", "path": top},
+		},
+	}
+	turns := []map[string]any{
+		{"role": "user", "content": []map[string]any{
+			{"type": "image_sequence", "input": "views", "label": "View Name: {{ name }}", "image_key": "path"},
+		}},
+	}
+	raw, _ := json.Marshal(turns)
+	msgs, err := buildMultiTurnMessages(raw, inputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Expect: [text "View Name: Front View", image, text "View Name: Top View", image]
+	if len(msgs[0].Blocks) != 4 {
+		t.Fatalf("expected 4 blocks, got %d", len(msgs[0].Blocks))
+	}
+	if msgs[0].Blocks[0].Text != "View Name: Front View" {
+		t.Errorf("first label wrong: %q", msgs[0].Blocks[0].Text)
+	}
+	if msgs[0].Blocks[2].Text != "View Name: Top View" {
+		t.Errorf("third label wrong: %q", msgs[0].Blocks[2].Text)
+	}
+}
+
+func TestBuildMultiTurnMessages_MixedStringAndArray(t *testing.T) {
+	pngMagic := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	inputs := map[string]any{
+		"img": FileValue{Name: "x.png", Data: pngMagic, MediaType: "image/png"},
+	}
+	turns := []map[string]any{
+		{"role": "user", "content": "plain text"},
+		{"role": "assistant", "content": "response"},
+		{"role": "user", "content": []map[string]any{
+			{"type": "image", "input": "img"},
+		}},
+	}
+	raw, _ := json.Marshal(turns)
+	msgs, err := buildMultiTurnMessages(raw, inputs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+	if msgs[0].Content != "plain text" {
+		t.Errorf("first message content wrong: %q", msgs[0].Content)
+	}
+	if msgs[2].Blocks == nil || msgs[2].Blocks[0].Type != "image" {
+		t.Errorf("third message should have image block")
+	}
+}
+
+// --- Gap 3: max_tokens config ---
+
+func TestBuildCompletionRequest_MaxTokens_Default(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node := makeNode(t, `{"type":"prompt","inputs":{},"config":{"model":"anthropic/claude-haiku-4-5"}}`)
+	req, err := buildCompletionRequest(node, dir, map[string]any{}, "anthropic/claude-haiku-4-5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.MaxTokens != 16000 {
+		t.Errorf("expected default max_tokens=16000, got %d", req.MaxTokens)
+	}
+}
+
+func TestBuildCompletionRequest_MaxTokens_Custom(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node := makeNode(t, `{
+		"type": "prompt", "inputs": {},
+		"config": {"model": "gemini/gemini-3.1-pro-preview", "max_tokens": 65536}
+	}`)
+	req, err := buildCompletionRequest(node, dir, map[string]any{}, "gemini/gemini-3.1-pro-preview")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.MaxTokens != 65536 {
+		t.Errorf("expected max_tokens=65536, got %d", req.MaxTokens)
+	}
+}
+
 func TestCollectFileBlocks_ToolImageOutput(t *testing.T) {
 	imgData := []byte{0xff, 0xd8, 0xff} // JPEG magic
 	inputs := map[string]any{
