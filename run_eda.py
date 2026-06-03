@@ -17,7 +17,6 @@ import json
 import os
 import re
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -181,165 +180,47 @@ def prepare_feature_queue(all_dims_json: str) -> dict:
     return {"feature_names": feature_names}
 
 
-@rt.tool("drawing.verify_feature", version="v1")
-def verify_feature(
+@rt.tool("drawing.get_feature_context", version="v1")
+def get_feature_context(
     feature_name: str,
-    all_features_json: str,
-    all_dims_json: str,
     output_dir: str,
+    view_crops_json: str,
+    dim_data_json: str,
+    all_features_json: str,
 ) -> dict:
     """
-    Phase 5 — spatial verification for one feature.
-    Builds the TS-mirrored interleaved multimodal payload and calls Gemini.
-    Returns the verification result plus any newly discovered feature names.
+    Pure data tool — no LLM call.
+    Resolves view crops, per-feature dimension crops, and the feature crop path
+    for a single feature, ready for use by the verify_prompt node.
     """
-    _ensure("google-genai")
-    from google import genai
-    from google.genai import types
-    from google.genai.types import GenerateContentConfig
+    view_crops = json.loads(view_crops_json) if isinstance(view_crops_json, str) else view_crops_json
+    dim_data   = json.loads(dim_data_json)   if isinstance(dim_data_json,   str) else dim_data_json
 
-    all_features = json.loads(all_features_json)
-    all_dims     = json.loads(all_dims_json)
+    # Build dims list: map each (dim, crop_path) pair to a flat object
+    feat_entry  = dim_data.get(feature_name, {})
+    raw_dims    = feat_entry.get("dims", [])
+    crop_paths  = feat_entry.get("dim_crop_paths", [])
+    dims = []
+    for i, dim in enumerate(raw_dims):
+        dims.append({
+            "text":    dim.get("dimensionLxB", ""),
+            "callout": dim.get("rawTextCallout", ""),
+            "details": dim.get("dimensionDetails", ""),
+            "path":    crop_paths[i] if i < len(crop_paths) else "",
+        })
 
-    # ── Gemini client ─────────────────────────────────────────────────────────
-    llm_cfg  = json.loads(os.environ.get("LLM_CONFIG", "{}"))
-    creds    = llm_cfg.get("credentials", {})
-    provider = llm_cfg.get("document", {}).get("provider", "gemini_vertex")
-    model    = llm_cfg.get("document", {}).get("model", "gemini-2.5-pro")
-
-    http_opts = {"timeout": None}
-    if "vertex" in provider:
-        client = genai.Client(
-            vertexai=True,
-            project=creds.get("vertex_project_id", ""),
-            location=creds.get("vertex_location", "us-east5"),
-            http_options=http_opts,
-        )
-    else:
-        client = genai.Client(
-            api_key=creds.get("gemini_api_key", os.environ.get("GEMINI_API_KEY", "")),
-            http_options=http_opts,
-        )
-
-    # ── Build interleaved payload ─────────────────────────────────────────────
-    def _img_part(path: str) -> types.Part:
-        return types.Part.from_bytes(data=Path(path).read_bytes(), mime_type="image/png")
-
-    contents: list = []
-
-    # All view crops, labeled
-    views_dir = Path(output_dir) / "crops" / "views"
-    if views_dir.exists():
-        for png in sorted(views_dir.glob("*.png")):
-            contents.append(f"View Name: {png.stem.replace('_', ' ').title()}")
-            contents.append(_img_part(str(png)))
-
-    contents.append(f"--- Target Feature: {feature_name} ---")
-
-    # Per-dim: text labels + dim crop
-    dims_dir   = Path(output_dir) / "crops" / "dims"
-    feat_dims  = [d for d in all_dims if d.get("featureName") == feature_name]
-    for i, dim in enumerate(feat_dims):
-        contents.append(f"Dimension found: {dim.get('dimensionLxB', '')}")
-        if dim.get("rawTextCallout"):
-            contents.append(f"Raw callout: {dim['rawTextCallout']}")
-        if dim.get("dimensionDetails"):
-            contents.append(f"Details: {dim['dimensionDetails']}")
-        if dims_dir.exists():
-            candidate = dims_dir / f"{_safe(feature_name)}_{i}.png"
-            if candidate.exists():
-                contents.append("Dimension Crop:")
-                contents.append(_img_part(str(candidate)))
-
-    # Feature crop
+    # Locate the feature crop PNG
+    feat_crop_path = ""
     feats_dir = Path(output_dir) / "crops" / "features"
-    if feats_dir.exists():
-        feat_crop = feats_dir / f"{_safe(feature_name)}.png"
-        if feat_crop.exists():
-            view_ctx = next(
-                (f.get("viewContext", "") for f in all_features if f.get("featureName") == feature_name), ""
-            )
-            contents.append(f"Feature Crop in context of: {view_ctx}")
-            contents.append(_img_part(str(feat_crop)))
-
-    # Prompt
-    contents.append(
-        f"""Step 6: Spatial Analysis for Envelope Identification — analyzing ONE specific feature.
-You are an expert mechanical engineer. Use your vision capabilities.
-
-For the SPECIFIC FEATURE "{feature_name}", perform SPATIAL INCORPORATION ANALYSIS:
-
-0. EXISTS AS PHYSICAL FEATURE: set existsAsPhysicalFeature (bool).
-1. MENTAL TRACE OF OUTER SKIN: does this feature form part of the absolute outer boundary?
-2. GEOMETRY: SOLID MATERIAL ADDITION vs MATERIAL REMOVAL. Voids/holes do NOT increase the bounding box.
-3. ENVELOPE CONTRIBUTION (impactsEnvelope: YES/NO/MAYBE) and AXES (Length/Breadth/Height).
-4. CORRECTED FEATURE NAME: provide correctedFeatureName if wrong, else return "{feature_name}" unchanged.
-5. MISSED GEOMETRY: list any newly discovered features in newFoundFeatures (featureName, dimensionLxB, reasoning).
-
-Return a JSON array with EXACTLY ONE FeatureVerificationInfo object for: "{feature_name}".
-"""
-    )
-
-    schema = {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "featureName":             {"type": "STRING"},
-                "correctedFeatureName":    {"type": "STRING"},
-                "existsAsPhysicalFeature": {"type": "BOOLEAN"},
-                "visibleInViews": {"type": "ARRAY", "items": {
-                    "type": "OBJECT",
-                    "properties": {"viewName": {"type": "STRING"}, "isVisible": {"type": "BOOLEAN"}},
-                    "required": ["viewName", "isVisible"],
-                }},
-                "impactsEnvelope": {"type": "STRING", "enum": ["YES", "NO", "MAYBE"]},
-                "associatedAxes":  {"type": "ARRAY", "items": {"type": "STRING"}},
-                "reasoning":       {"type": "STRING"},
-                "newFoundFeatures": {"type": "ARRAY", "items": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "featureName":  {"type": "STRING"},
-                        "dimensionLxB": {"type": "STRING"},
-                        "reasoning":    {"type": "STRING"},
-                    },
-                    "required": ["featureName", "dimensionLxB", "reasoning"],
-                }},
-            },
-            "required": ["featureName", "existsAsPhysicalFeature", "impactsEnvelope", "associatedAxes", "reasoning"],
-        },
-    }
-
-    cfg = GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=schema,
-        temperature=0.1,
-        max_output_tokens=65536,
-    )
-
-    for attempt in range(3):
-        try:
-            resp = client.models.generate_content(model=model, contents=contents, config=cfg)
-            items = json.loads(resp.text or "[]")
-            break
-        except Exception as exc:
-            if attempt == 2:
-                raise
-            time.sleep(2 ** attempt)
-            print(f"  verify_feature attempt {attempt+1} failed ({exc}), retrying…", file=sys.stderr)
-
-    vdata        = (items[0] if isinstance(items, list) and items else {})
-    new_features = [nf["featureName"] for nf in (vdata.get("newFoundFeatures") or []) if nf.get("featureName")]
+    candidate = feats_dir / f"{_safe(feature_name)}.png"
+    if candidate.exists():
+        feat_crop_path = str(candidate)
 
     return {
-        "featureName":             vdata.get("featureName", feature_name),
-        "correctedFeatureName":    (vdata.get("correctedFeatureName") or feature_name).strip() or feature_name,
-        "existsAsPhysicalFeature": vdata.get("existsAsPhysicalFeature", True),
-        "visibleInViews":          vdata.get("visibleInViews", []),
-        "impactsEnvelope":         vdata.get("impactsEnvelope", "MAYBE"),
-        "associatedAxes":          vdata.get("associatedAxes", ["None"]),
-        "reasoning":               vdata.get("reasoning", ""),
-        "new_features":            new_features,
+        "feature_name":      feature_name,
+        "view_crops":        view_crops,
+        "dims":              dims,
+        "feature_crop_path": feat_crop_path,
     }
 
 

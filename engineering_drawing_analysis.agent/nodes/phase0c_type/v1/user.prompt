@@ -6,7 +6,7 @@ TITLE BLOCK:
 DOMAIN RESULT:
 {{ domain_result }}
 
-If in_scope is false in the domain result, set routing to "out_of_scope" immediately.
+If in_scope is false in the domain result (i.e. the drawing is clearly not a machined part — it is a schematic, structural drawing, sheet metal layout, or P&ID), set routing to "out_of_scope" immediately.
 
 Otherwise examine the drawing image and answer:
 (a) Is a BOM or parts list table present? Describe its columns and row count.
@@ -17,7 +17,7 @@ Otherwise examine the drawing image and answer:
 (f) Is one part shown throughout, or multiple components assembled together?
 
 Classify as:
-- "process_part" → routing: "process_operation" (single part, all features dimensioned, no BOM, no item balloons)
+- "process_part" → routing: "process_operation" (single machined part, all features dimensioned, no BOM, no item balloons)
 - "assembly" → routing: "assembly_operation" (BOM present, item balloons, interface dims only)
 
 Provide 3-5 evidence bullets and a one-sentence rationale.
