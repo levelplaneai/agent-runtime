@@ -76,7 +76,7 @@ func ExecutePrompt(
 
 	if len(toolDefs) == 0 {
 		// --- single-shot path (existing behaviour) ---
-		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model})
+		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model, Inputs: requestToTrace(req)})
 		reqStart := time.Now()
 
 		resp, err := provider.Complete(ctx, req)
@@ -91,6 +91,7 @@ func ExecutePrompt(
 			InputTokens:  resp.InputTokens,
 			OutputTokens: resp.OutputTokens,
 			DurationMS:   time.Since(reqStart).Milliseconds(),
+			Output:       map[string]any{"text": resp.Content},
 		})
 		for _, name := range resp.BuiltinToolsUsed {
 			t.Emit(TraceEvent{Event: "builtin_tool_used", Node: nodeName, Tool: name})
@@ -111,7 +112,7 @@ func ExecutePrompt(
 		t.Emit(TraceEvent{Event: "agent_iteration", Node: nodeName, Attempt: iter + 1})
 		req.Messages = messages
 
-		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model, Attempt: iter + 1})
+		t.Emit(TraceEvent{Event: "llm_request", Node: nodeName, Model: req.Model, Attempt: iter + 1, Inputs: requestToTrace(req)})
 		iterStart := time.Now()
 
 		resp, err := provider.Complete(ctx, req)
@@ -127,6 +128,7 @@ func ExecutePrompt(
 			OutputTokens: resp.OutputTokens,
 			DurationMS:   time.Since(iterStart).Milliseconds(),
 			Attempt:      iter + 1,
+			Output:       map[string]any{"text": resp.Content},
 		})
 		for _, name := range resp.BuiltinToolsUsed {
 			t.Emit(TraceEvent{Event: "builtin_tool_used", Node: nodeName, Tool: name, Attempt: iter + 1})
@@ -572,4 +574,54 @@ func extractOutput(resp CompletionResponse) (map[string]any, error) {
 		return map[string]any{"text": resp.Content}, nil
 	}
 	return out, nil
+}
+
+// requestToTrace converts a CompletionRequest into a map suitable for trace Inputs.
+// Binary data (images, documents) is replaced with a compact size summary.
+func requestToTrace(req CompletionRequest) map[string]any {
+	m := map[string]any{
+		"messages": messagesToTrace(req.Messages),
+	}
+	if req.System != "" {
+		m["system"] = req.System
+	}
+	if req.Temperature != nil {
+		m["temperature"] = *req.Temperature
+	}
+	return m
+}
+
+// messagesToTrace converts a []Message to a JSON-serializable slice, replacing
+// binary content blocks with lightweight summaries.
+func messagesToTrace(msgs []Message) []map[string]any {
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		entry := map[string]any{"role": m.Role}
+		if len(m.Blocks) == 0 {
+			entry["content"] = m.Content
+		} else {
+			parts := make([]map[string]any, 0, len(m.Blocks))
+			for _, b := range m.Blocks {
+				switch b.Type {
+				case "text":
+					parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+				case "tool_use":
+					var args any
+					_ = json.Unmarshal(b.ToolInput, &args)
+					parts = append(parts, map[string]any{"type": "tool_use", "id": b.ToolUseID, "tool": b.ToolName, "input": args})
+				case "tool_result":
+					if len(b.SubBlocks) > 0 {
+						parts = append(parts, map[string]any{"type": "tool_result", "id": b.ToolUseID, "tool": b.ToolName, "content": "[multimodal]"})
+					} else {
+						parts = append(parts, map[string]any{"type": "tool_result", "id": b.ToolUseID, "tool": b.ToolName, "content": b.Text})
+					}
+				case "image", "document":
+					parts = append(parts, map[string]any{"type": b.Type, "media_type": b.MediaType, "size_bytes": len(b.Data)})
+				}
+			}
+			entry["content"] = parts
+		}
+		out = append(out, entry)
+	}
+	return out
 }

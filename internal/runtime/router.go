@@ -142,11 +142,22 @@ func executeLLMDecision(
 		return "", "", fmt.Errorf("rendering classify prompt: %w", err)
 	}
 
+	fileBlocks := collectFileBlocks(resolved)
+	var userMsg Message
+	if len(fileBlocks) == 0 {
+		userMsg = Message{Role: "user", Content: rendered}
+	} else {
+		blocks := make([]ContentBlock, 0, 1+len(fileBlocks))
+		blocks = append(blocks, ContentBlock{Type: "text", Text: rendered})
+		blocks = append(blocks, fileBlocks...)
+		userMsg = Message{Role: "user", Blocks: blocks}
+	}
+
 	temp := 0.0
 	req := CompletionRequest{
 		Model:       dw.Model,
 		MaxTokens:   256,
-		Messages:    []Message{{Role: "user", Content: rendered}},
+		Messages:    []Message{userMsg},
 		Temperature: &temp,
 		OutputSchema: map[string]any{
 			"type": "object",
@@ -161,7 +172,7 @@ func executeLLMDecision(
 	}
 
 	t := tracerFrom(ctx)
-	t.Emit(TraceEvent{Event: "llm_request", Node: localName, Model: req.Model})
+	t.Emit(TraceEvent{Event: "llm_request", Node: localName, Model: req.Model, Inputs: requestToTrace(req)})
 	start := time.Now()
 
 	resp, err := provider.Complete(ctx, req)
@@ -176,6 +187,7 @@ func executeLLMDecision(
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.OutputTokens,
 		DurationMS:   time.Since(start).Milliseconds(),
+		Output:       map[string]any{"text": resp.Content},
 	})
 
 	var out struct {
