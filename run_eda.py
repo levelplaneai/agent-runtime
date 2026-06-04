@@ -200,21 +200,28 @@ def get_feature_context(
     feat_entry  = dim_data.get(feature_name, {})
     raw_dims    = feat_entry.get("dims", [])
     crop_paths  = feat_entry.get("dim_crop_paths", [])
+    # Only include dims that have an existing crop image — empty paths crash file_path binding
     dims = []
     for i, dim in enumerate(raw_dims):
-        dims.append({
-            "text":    dim.get("dimensionLxB", ""),
-            "callout": dim.get("rawTextCallout", ""),
-            "details": dim.get("dimensionDetails", ""),
-            "path":    crop_paths[i] if i < len(crop_paths) else "",
-        })
+        p = crop_paths[i] if i < len(crop_paths) else ""
+        if p and Path(p).exists():
+            dims.append({
+                "text":    dim.get("dimensionLxB", ""),
+                "callout": dim.get("rawTextCallout", ""),
+                "details": dim.get("dimensionDetails", ""),
+                "path":    p,
+            })
 
-    # Locate the feature crop PNG
-    feat_crop_path = ""
+    # Locate the feature crop PNG. For newly-discovered features (no Phase 3 crop),
+    # fall back to the first view crop so the file_path binding always gets a valid path.
     feats_dir = Path(output_dir) / "crops" / "features"
     candidate = feats_dir / f"{_safe(feature_name)}.png"
     if candidate.exists():
         feat_crop_path = str(candidate)
+    elif view_crops:
+        feat_crop_path = view_crops[0]["path"]  # fallback: first view crop
+    else:
+        feat_crop_path = ""
 
     return {
         "feature_name":      feature_name,
