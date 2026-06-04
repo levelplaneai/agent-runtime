@@ -19,11 +19,19 @@ func Resolve(ctx *ExecutionContext, path string) (any, error) {
 	}
 
 	parts := strings.Split(path[2:], ".")
+	root := parts[0]
+
+	// A bare $.<name> with no sub-field is only valid as a reference to an
+	// iteration variable set by a map or loop node (e.g. "$.item"). Check that
+	// before emitting the generic "too short" error so $.<as_name> resolves to
+	// the whole current item, matching the documented behaviour in FLOWS.md.
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("path %q: too short — expected $.inputs.<field> or $.<node>.output[.<path>]", path)
+		if val, ok := ctx.IterVar(root); ok {
+			return val, nil
+		}
+		return nil, fmt.Errorf("path %q: too short — expected $.inputs.<field>, $.<node>.output[.<path>], or $.<iter_var>", path)
 	}
 
-	root := parts[0]
 	switch root {
 	case "inputs":
 		field := parts[1]
