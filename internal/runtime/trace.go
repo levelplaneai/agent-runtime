@@ -134,6 +134,12 @@ func (t *Tracer) writeHuman(e TraceEvent) {
 		fmt.Fprintf(w, "[MAP]   start   %-24s items=%d\n", e.Node, e.ItemCount)
 	case "map_item_done":
 		fmt.Fprintf(w, "[MAP]   item    %-24s %d/%d\n", e.Node, e.ItemIndex, e.ItemCount)
+	case "loop_start":
+		fmt.Fprintf(w, "[LOOP]  start   %-24s items=%d\n", e.Node, e.ItemCount)
+	case "loop_item_done":
+		fmt.Fprintf(w, "[LOOP]  item    %-24s %d/%d\n", e.Node, e.ItemIndex, e.ItemCount)
+	case "loop_queue_extended":
+		fmt.Fprintf(w, "[LOOP]  extend  %-24s queue_len=%d\n", e.Node, e.ItemCount)
 	case "parallel_start":
 		fmt.Fprintf(w, "[PAR]   start   %-24s branches=%d\n", e.Node, e.ItemCount)
 	case "parallel_branch_done":
