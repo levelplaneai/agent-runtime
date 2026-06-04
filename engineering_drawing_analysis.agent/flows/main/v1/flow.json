@@ -7,19 +7,7 @@
   "outputs": {
     "title_block": { "from": "$.phase0a_title_block.output.text" },
     "domain": { "from": "$.phase0b_domain.output" },
-    "routing": { "from": "$.phase0c_type.output" },
-    "planning": { "from": "$.phase1_planning.output" },
-    "view_boxes": { "from": "$.phase2a_view_boxes.output" },
-    "envelope_hypotheses": { "from": "$.phase2b_envelope.output" },
-    "all_features": { "from": "$.crop_features.output" },
-    "all_dimensions": { "from": "$.crop_dims.output" },
-    "verifications": { "from": "$.loop_phase5.output" },
-    "contributing_features": { "from": "$.build_feature_split.output" },
-    "envelope": { "from": "$.phase6_envelope.output" },
-    "unified_features": { "from": "$.phase_unify.output" },
-    "spatial_understanding": { "from": "$.map_phase8.output" },
-    "input_material": { "from": "$.phase7_input_material.output" },
-    "reconciliation_graph": { "from": "$.phase9_reconciliation.output" }
+    "routing": { "from": "$.phase0c_type.output" }
   },
   "entry": "phase0a_title_block",
   "nodes": {

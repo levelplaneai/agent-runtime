@@ -5,7 +5,7 @@
     "drawing": { "from": "$.inputs.drawing", "type": "file_path" }
   },
   "config": {
-    "model": "anthropic/claude-opus-4-8"
+    "model": "anthropic/claude-sonnet-4-6"
   },
   "output_schema": {
     "type": "object",

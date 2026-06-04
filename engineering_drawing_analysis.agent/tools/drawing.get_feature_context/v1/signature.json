@@ -1,0 +1,44 @@
+{
+  "description": "Pure data tool: resolves view crops, dimension crops, and feature crop path for a single feature name. No LLM call.",
+  "timeout_seconds": 30,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "feature_name": { "type": "string", "description": "The feature name to resolve context for" },
+      "output_dir": { "type": "string", "description": "Root output directory used to locate crop subdirectories" },
+      "view_crops_json": { "type": "string", "description": "JSON array of {name, path} objects from crop_views" },
+      "dim_data_json": { "type": "string", "description": "JSON object keyed by feature name; each value has dims and dim_crop_paths arrays" },
+      "all_features_json": { "type": "string", "description": "JSON array of all features from crop_features" }
+    },
+    "required": ["feature_name", "output_dir", "view_crops_json", "dim_data_json", "all_features_json"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "feature_name": { "type": "string" },
+      "view_crops": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "path": { "type": "string" }
+          }
+        }
+      },
+      "dims": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "text":    { "type": "string" },
+            "callout": { "type": "string" },
+            "details": { "type": "string" },
+            "path":    { "type": "string" }
+          }
+        }
+      },
+      "feature_crop_path": { "type": "string" }
+    }
+  }
+}

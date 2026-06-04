@@ -9,7 +9,7 @@
     "image.crop_features@v1",
     "image.crop_dims@v1",
     "drawing.prepare_feature_queue@v1",
-    "drawing.verify_feature@v1",
+    "drawing.get_feature_context@v1",
     "drawing.build_feature_split@v1",
     "drawing.reconciliation_graph@v1"
   ]

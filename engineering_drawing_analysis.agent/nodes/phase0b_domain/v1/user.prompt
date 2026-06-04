@@ -3,18 +3,19 @@ You are classifying an engineering drawing's domain. The title block text extrac
 TITLE BLOCK TEXT:
 {{ title_block }}
 
-Now examine the drawing image above. Assess:
-(a) Drawing standard in title block (ISO, ASME, MIL-STD, DEF STAN, IATF, GMW, Ford GSDS, etc.)
-(b) Material specification format (AMS, MIL-SPEC, SAE, ASTM, EN, DIN, OEM-grade, etc.)
-(c) Part number format — cage codes, NATO stock numbers, OEM alpha-numeric patterns
-(d) Quality / certification notes — IATF, PPAP, AS9100, NADCAP, FAA, airworthiness
-(e) Special process callouts — FPI, MPI, shot peen, anodise per MIL spec, zinc plate per OEM spec
-(f) Safety or critical characteristic symbols — Δ, ◆, SC, SDS, SAFETY CRITICAL
-(g) Tightest tolerances visible
+Now examine the drawing image. Assess:
+(a) Drawing standard in title block (ISO, ASME, MIL-STD, IATF, GMW, etc.)
+(b) Material specification format (AMS, MIL-SPEC, SAE, ASTM, EN, DIN, etc.)
+(c) Part number format
+(d) Quality / certification notes (IATF, PPAP, AS9100, NADCAP, FAA, etc.)
+(e) Industry indicators — automotive OEM, aerospace, general mechanical, oil & gas, medical, etc.
 
-Classify into one of:
+Classify the domain into one of:
 - "Automotive": IATF 16949, PPAP/APQP, OEM standards (GMW3059, Ford GSDS), SAE material grades
 - "Aerospace": MIL-STD-100, ASME Y14.100, AMS material specs, AS9100/NADCAP, cage code P/N format
-- "Other": anything not matching Automotive or Aerospace
+- "General Mechanical": ISO 2768, DIN, BS, EN standards — standard industrial machined parts
+- "Other": electrical schematics, P&IDs, civil/structural, sheet metal layout, anything non-machined
 
-Set in_scope to true only for Automotive or Aerospace. Provide 3-5 evidence bullets.
+Set in_scope to true for Automotive, Aerospace, and General Mechanical (any machined part drawing).
+Set in_scope to false only for drawings that are clearly not machined parts (schematics, structural, sheet metal, etc.).
+Provide 3-5 evidence bullets.
