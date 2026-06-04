@@ -1,7 +1,0 @@
-Step 3: Crop all views. You MUST use your vision capabilities.
-- Separate all views by defining precise bounding boxes for each distinct view. This includes Main Views (Front, Top, Right, Bottom, Back, etc.), Section Views (e.g. SECTION A-A, SECTION B-B), Detail Views (e.g. DETAIL V, VIEW-V, DETAIL A), Isometric / 3D Views, and any auxiliary views.
-- Additionally, extract the Title Block, Revision Block, and General Notes as separate "views".
-- Provide the bounding boxes mapped to a 0 to 1000 scale (e.g. ymin: 100, xmin: 200, ymax: 900, xmax: 800).
-- CRITICAL: The bounding box for each view MUST completely encompass the physical object AND all of its localized text, dimensions, leader lines, section markers, and annotations tightly associated with that view.
-- Ensure that the bounding boxes are tight enough to exclude information from adjacent views, but loose enough to capture all leader lines and text for the target view.
-Return a JSON object with a "views" array of ViewInfo objects, each with: viewName, ymin, xmin, ymax, xmax.
