@@ -1,0 +1,66 @@
+{
+  "type": "prompt",
+  "description": "Build complete 3D spatial understanding for one specific unified atomic feature",
+  "inputs": {
+    "views": { "from": "$.crop_views.output.views" },
+    "feature": { "from": "$.feature" },
+    "contributing": { "from": "$.build_feature_split.output.contributing" },
+    "non_contributing": { "from": "$.build_feature_split.output.non_contributing" },
+    "unified_features": { "from": "$.phase_unify.output.unifiedAtomicFeatures" },
+    "overall_dims": { "from": "$.phase_unify.output.overallDimensions" },
+    "overall_3d": { "from": "$.phase_unify.output.overall3DPartUnderstanding" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 65536,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "image_sequence", "input": "views", "label": "View Name: {{ name }}", "image_key": "path" },
+          { "type": "text", "value": "--- Atomic Features & Envelope Impacts ---\n-- CONTRIBUTING FEATURES --\n{{ contributing }}\n-- NON-CONTRIBUTING FEATURES --\n{{ non_contributing }}\n--- Unified Atomic Physical Features (Step 8A) ---\n{{ unified_features }}\n--- Overall Dimensions Calculated ---\n{{ overall_dims }}\n--- 3D Part Understanding ---\n{{ overall_3d }}\n--- FOCUSING EXCLUSIVELY ON THIS FEATURE ---\n{{ feature }}\n\nStep 8B: Foundation for Spatial understanding — analyzing ONE specific feature.\nYou are an expert mechanical engineer and machinist. Build the complete 3D spatial understanding for ONLY the feature identified above. You MUST use your vision capabilities to precisely examine the drawing.\nCRITICAL MINDSET SHIFT: Dimensions are a byproduct of geometry, not the other way around. Your NORTH STAR is purely the physical part geometry and its solid material boundaries.\n\nFor the SPECIFIC TRUE ATOMIC PHYSICAL FEATURE above, perform the following rigorous SPATIAL CORRELATION ANALYSIS:\n\n0. PURE GEOMETRIC ANALYSIS FIRST (UNBIASED TRUTH) — 'pureGeometricAnalysis':\n   - BEFORE trusting the provided feature name, look purely at the physical representation in the views. What is its fundamental physical shape based solely on visual evidence?\n   - Does it actually exist geometrically? ('existsAsPhysicalFeature').\n   - Which views is it visibly represented in? ('visibleInViews': array of {viewName, isVisible}).\n\n0.2. WHOLE-PART CONTEXT ('wholePartContext'):\n   - Where does this specific geometric shape exist within the overall 3D part?\n\n0.5. ENVELOPE IMPACT VERIFICATION & REASONING:\n   - Does this unified feature physically extend or define the absolute maximum bounding box envelope? ('impactsEnvelope': \"YES\" / \"NO\" / \"MAYBE\").\n   - Which 3D axes (Length, Breadth, Height, None) does it associate with? ('associatedAxes').\n   - Provide explicit 'reasoning' based STRICTLY on the visual physical geometry observed.\n\n1. ADVANCED TOPOLOGICAL & LINE-TYPE TRACING (B-Rep) — 'topologicalLineTracing':\n   - For each view where this feature appears, explicitly state the LINE TYPES that define its boundary (Solid/Visible, Dashed/Hidden, Chain/Center).\n   - Conclude if the feature envelope is solid positive space or negative space.\n\n2. MENTAL TRACE OF OUTER SKIN ('mentalTraceOfOuterSkin'):\n   - Walk the outermost physical boundary across all views; how does this feature relate to it?\n\n3. GEOMETRY & LINE NATURE ('geometryAndLineNature'):\n   - SOLID MATERIAL ADDITION vs MATERIAL REMOVAL — based on your B-Rep trace.\n\n4. PHYSICAL GEOMETRY EXPLANATION ('physicalGeometryExplanation'):\n   - What exactly is this feature in 3D? How do dimensions define this envelope geometry?\n\n5. VIEW CORRELATION ('viewCorrelation', array of {viewName, representation}).\n\n6. FEATURE CORRELATION ('featureCorrelation', array of {relatedFeatureName, relationshipType}).\n\n7. SPECIAL ATTENTION DETAILS ('specialAttentionDetails') (OPTIONAL).\n\n8. MANUFACTURING NATURE ('manufacturing_nature', 'skin_or_internal'):\n   - Process classes: turning, boring, drilling, milling, grinding, broaching, edm, threading, none-removal.\n   - 'skin_or_internal': \"outer\" / \"internal\" / \"intersecting\".\n\n9. PHYSICS & KINEMATICS CUES ('physics_kinematics_cues').\n\n10. COMPREHENSIVE DIMENSION DERIVATION & SPATIAL CO-RELATION VERIFICATION:\n   - 'crossFeatureDimensionalCohesion': how dimensions of adjacent features bound or impact this feature.\n   - 'refinedCrop' (OPTIONAL): if existing crops are insufficient, emit {viewName, ymin, xmin, ymax, xmax (0-1000 scale), reasoning}.\n   - 'axisAlignmentWithGlobal': how this feature's local L/B/H map to the part's global L/B/H.\n   - 'spatialRelationshipAnalysis': how this feature's envelope relates to parent/child/sibling features.\n   - DIMENSION SEPARATION: 'contributingDimensions' = {length: [...], breadth: [...], height: [...]}; 'unmappedDimensions' for references or non-bounding values.\n   - 'overallDimensionsOfFeature': {length, breadth, height} each with {paths: [{description, dimensionsUsed, steps, result, confidence}], finalValue, reasoning}.\n   - NO UNKNOWNS ALLOWED: if not explicit, calculate or assume and append \"(Assumed)\".\n   - 'envelopeSanityCheck': verify the deduced dimensions fit within the overall part dimensions.\n\nReturn a JSON object with a 'spatial_data' array containing EXACTLY ONE SpatialUnderstandingInfo object for this feature." }
+        ]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "spatial_data": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "featureName": { "type": "string" },
+            "originalFeatureNames": { "type": "array", "items": { "type": "string" } },
+            "dimensions": { "type": "array", "items": { "type": "string" } },
+            "pureGeometricAnalysis": { "type": "string" },
+            "wholePartContext": { "type": "string" },
+            "existsAsPhysicalFeature": { "type": "string" },
+            "topologicalLineTracing": { "type": "string" },
+            "mentalTraceOfOuterSkin": { "type": "string" },
+            "geometryAndLineNature": { "type": "string" },
+            "physicalGeometryExplanation": { "type": "string" },
+            "impactsEnvelope": { "type": "string", "enum": ["YES", "NO", "MAYBE"] },
+            "associatedAxes": { "type": "array", "items": { "type": "string" } },
+            "reasoning": { "type": "string" },
+            "manufacturing_nature": { "type": "array", "items": { "type": "string" } },
+            "skin_or_internal": { "type": "string", "enum": ["outer", "internal", "intersecting"] },
+            "overallDimensionsOfFeature": {
+              "type": "object",
+              "properties": {
+                "length": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] },
+                "breadth": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] },
+                "height": { "type": "object", "properties": { "paths": { "type": "array", "items": { "type": "object" } }, "finalValue": { "type": "string" }, "reasoning": { "type": "string" } }, "required": ["paths", "finalValue", "reasoning"] }
+              },
+              "required": ["length", "breadth", "height"]
+            }
+          },
+          "required": ["featureName", "originalFeatureNames", "dimensions", "pureGeometricAnalysis", "wholePartContext", "existsAsPhysicalFeature", "topologicalLineTracing", "mentalTraceOfOuterSkin", "geometryAndLineNature", "physicalGeometryExplanation", "impactsEnvelope", "associatedAxes", "reasoning", "manufacturing_nature", "skin_or_internal", "overallDimensionsOfFeature"]
+        }
+      }
+    },
+    "required": ["spatial_data"]
+  },
+  "on_error": "retry:2"
+}

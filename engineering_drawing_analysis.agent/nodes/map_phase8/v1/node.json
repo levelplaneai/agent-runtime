@@ -1,0 +1,10 @@
+{
+  "type": "map",
+  "description": "Run per-feature spatial understanding analysis for each unified atomic feature in parallel",
+  "config": {
+    "over": "$.phase_unify.output.unifiedAtomicFeatures",
+    "as": "feature",
+    "do": "phase8_per_feature",
+    "concurrency": 4
+  }
+}

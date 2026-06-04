@@ -1,0 +1,19 @@
+{
+  "description": "Builds the phase9 reconciliation graph from phase8 spatial understanding data. Pure computation — no LLM call. Writes graph JSON to output_dir and returns the graph.",
+  "timeout_seconds": 30,
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "spatial_data": { "type": "string", "description": "JSON array of phase8 spatial understanding results" },
+      "output_dir": { "type": "string" }
+    },
+    "required": ["spatial_data", "output_dir"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "nodes": { "type": "array", "items": { "type": "object" } },
+      "edges": { "type": "array", "items": { "type": "object" } }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "type": "tool_call",
+  "description": "Extract a deduplicated ordered list of unique feature names from the phase4 dimension data to seed the verification loop",
+  "inputs": {
+    "all_dims_json": { "from": "$.crop_dims.output.all_dims_json" }
+  },
+  "config": {
+    "tool": "drawing.prepare_feature_queue@v1",
+    "args": {
+      "all_dims_json": "{{ all_dims_json }}"
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "feature_names": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

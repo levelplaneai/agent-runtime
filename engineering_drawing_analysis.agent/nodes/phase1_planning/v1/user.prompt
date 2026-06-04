@@ -1,0 +1,5 @@
+Step 2: Create a high-level step-by-step plan for execution based on this drawing.
+You MUST use your vision capabilities to precisely examine the drawing.
+Focus only on extracting views and identifying/mapping features.
+Do NOT look at, mention, or calculate dimensions at this high-level planning stage.
+Return a JSON object with a "plan" array of strings describing each step.

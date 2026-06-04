@@ -1,0 +1,18 @@
+{
+  "type": "prompt",
+  "description": "Extract all text from the title block and general notes on the drawing",
+  "inputs": {
+    "drawing": { "from": "$.inputs.drawing", "type": "file_path" }
+  },
+  "config": {
+    "model": "anthropic/claude-opus-4-8"
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"]
+  },
+  "on_error": "retry:2"
+}

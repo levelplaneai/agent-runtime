@@ -1,0 +1,46 @@
+{
+  "type": "prompt",
+  "description": "Exhaustively extract all atomic geometric features from a single cropped view",
+  "inputs": {
+    "view_name": { "from": "$.view.name" },
+    "view_crop": { "from": "$.view.path", "type": "file_path" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 32000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "image", "input": "view_crop" },
+          { "type": "text", "value": "This is the cropped image for {{ view_name }}:" },
+          { "type": "text", "value": "Step 4: Exhaustively extract ALL geometrical features FOR THIS EXACT VIEW ({{ view_name }}). You MUST use your vision capabilities.\nPerform a hyper-detailed, microscopic scan of this specific view in the diagram.\nThis is a highly complex image. You MUST spend time to extract EVERY single atomic feature in this view. NO MINOR FEATURE MAY BE LEFT BEHIND.\nBreak down the part into its foundational geometric elements VERY GRANULARLY using an ATOMIC DESIGN philosophy. In this context, ATOMIC DESIGN means you must extract ONLY distinct geometric SHAPES (e.g., individual holes, ledges, inner radii, distinct step depths, specific chamfers, faces, undercuts, fillets).\nCRITICAL ENFORCEMENT: YOU MUST COMPLETELY IGNORE GLOBAL MACROSCOPIC DIMENSIONS. NEVER extract or name a feature \"Overall Length\", \"Total Width\", \"Overall Extent\", or anything similar. We ONLY care about the localized physical shapes.\nCRITICAL MANDATE - STRICT DE-PLURALIZATION: If a view contains multiple instances of the same feature (e.g., 4 holes, 3 grooves, 2 steps), YOU ARE STRICTLY FORBIDDEN from creating a generalized plural feature grouping them. YOU MUST create a separate distinct geometric feature for EVERY SINGLE individual physical instance (e.g., \"Mounting Hole 1 in {{ view_name }}\", \"Mounting Hole 2 in {{ view_name }}\", etc.). Your output features MUST NEVER use plural nouns!\nDO NOT group multiple distinct features together.\nExtract every single minor feature (e.g., tiny holes, thin slots, chamfers, fillets, pins, threads, countersinks, very small grooves, tiny edges, steps, thread reliefs).\nCRITICAL RULE: We are extracting PHYSICAL SHAPES, not markings. Crop the PHYSICAL ATOMIC SHAPE itself.\nCRITICAL RULE FOR BOUNDING BOXES: Tightly crop ONLY around the specific physical atomic geometric shapes. ABSOLUTELY DO NOT crop any dimension numbers, text notes, leader lines, or dimension arrows in your bounding box.\nReturn a JSON object with a \"features\" array of feature objects, each with: featureName (append \" in {{ view_name }}\" or make unique), viewContext, geometricDescription, isMinor (boolean), ymin, xmin, ymax, xmax (0-1000 scale relative to THIS cropped view image)." }
+        ]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "features": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "featureName": { "type": "string" },
+            "viewContext": { "type": "string" },
+            "geometricDescription": { "type": "string" },
+            "isMinor": { "type": "boolean" },
+            "ymin": { "type": "number" },
+            "xmin": { "type": "number" },
+            "ymax": { "type": "number" },
+            "xmax": { "type": "number" }
+          },
+          "required": ["featureName", "viewContext", "geometricDescription", "isMinor", "ymin", "xmin", "ymax", "xmax"]
+        }
+      }
+    },
+    "required": ["features"]
+  },
+  "on_error": "retry:2"
+}

@@ -1,0 +1,25 @@
+{
+  "type": "tool_call",
+  "description": "Merge phase3 crops, phase4 dims, and phase5 verifications into allFeatures then split into contributing and non-contributing subsets",
+  "inputs": {
+    "verifications": { "from": "$.loop_phase5.output.verifications" },
+    "all_features_json": { "from": "$.crop_features.output.all_features_json" },
+    "all_dims_json": { "from": "$.crop_dims.output.all_dims_json" }
+  },
+  "config": {
+    "tool": "drawing.build_feature_split@v1",
+    "args": {
+      "verifications": "{{ verifications }}",
+      "all_features_json": "{{ all_features_json }}",
+      "all_dims_json": "{{ all_dims_json }}"
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "contributing": { "type": "array", "items": { "type": "object" } },
+      "non_contributing": { "type": "array", "items": { "type": "object" } },
+      "all_features_built": { "type": "array", "items": { "type": "object" } }
+    }
+  }
+}

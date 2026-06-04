@@ -1,0 +1,32 @@
+{
+  "type": "tool_call",
+  "description": "Run spatial envelope verification for one feature using the Gemini multimodal payload",
+  "inputs": {
+    "feature_name": { "from": "$.feature" },
+    "all_features_json": { "from": "$.crop_features.output.all_features_json" },
+    "all_dims_json": { "from": "$.crop_dims.output.all_dims_json" },
+    "view_paths_json": { "from": "$.crop_views.output.views" },
+    "output_dir": { "from": "$.inputs.output_dir" }
+  },
+  "config": {
+    "tool": "drawing.verify_feature@v1",
+    "args": {
+      "feature_name": "{{ feature_name }}",
+      "all_features_json": "{{ all_features_json }}",
+      "all_dims_json": "{{ all_dims_json }}",
+      "output_dir": "{{ output_dir }}"
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "featureName": { "type": "string" },
+      "correctedFeatureName": { "type": "string" },
+      "existsAsPhysicalFeature": { "type": "boolean" },
+      "impactsEnvelope": { "type": "string" },
+      "associatedAxes": { "type": "array", "items": { "type": "string" } },
+      "reasoning": { "type": "string" },
+      "new_features": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

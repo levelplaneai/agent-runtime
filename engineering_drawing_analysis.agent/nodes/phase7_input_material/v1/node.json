@@ -1,0 +1,52 @@
+{
+  "type": "prompt",
+  "description": "Determine the optimal input material form, stock size, and machine type for this part",
+  "inputs": {
+    "drawing": { "from": "$.inputs.drawing", "type": "file_path" },
+    "views": { "from": "$.crop_views.output.views" },
+    "all_features_built": { "from": "$.build_feature_split.output.all_features_built" },
+    "unified_dims": { "from": "$.phase_unify.output.overallDimensions" },
+    "envelope_dims": { "from": "$.phase6_envelope.output" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 32000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "image", "input": "drawing" },
+          { "type": "image_sequence", "input": "views", "label": "View Name: {{ name }}", "image_key": "path" },
+          { "type": "text", "value": "--- Extracted Features (Steps 4-6) ---\n{{ all_features_built }}\n--- Overall Envelope (Steps 7/8A) ---\n{{ unified_dims }}\n\nStep 9: Spatial Analysis for Input Material Form.\n\nYou are an expert mechanical engineer, metallurgist, and manufacturing planner. Your task is to determine the optimal input material form for this part. Your intelligence, logical deduction, and spatial reasoning must be flawless. You MUST use your vision capabilities to precisely examine the drawing.\n\nCRITICAL INSTRUCTION:\nConsider all the information used in Step 7 (Envelope Dimensions & Spatial Analysis). First, rigorously read the Original Upload's Title Block and extract the Part Number, Part Name, Material, Condition, and Hardness.\nIf any of these are barely legible or missing, use your reasoning to deduce a likely value and append \"(assumed)\". Then, provide a highly sophisticated physical and mathematical analysis for the following points:\n\n- Geometry Class Analysis: Analyze the rotational / prismatic / complex nature from the envelope and views.\n- Material Specification Analysis: Extract and analyze the material from the title block of the original upload.\n- Volume Efficiency Analysis: Evaluate stock removal ratios. Defend your yield ratio mathematically.\n- Notes Analysis: Analyze any explicit notes specifying \"CASTING\", \"FORGING\", \"FROM BAR STOCK\", heat treatment, surface finish, plating/coating, etc.\n- Standards Analysis: Analyze referenced standards (e.g., AMS forging specs -> forging implied; ASTM casting specs -> casting implied).\n- Weight and Size Analysis: Analyze the weight and size mathematically. Classify micro/small/medium/large.\n- Material Condition Analysis: Extract and decode the material condition code from the title block:\n  - VSQT / +QT / QT -> material is PRE-HARDENED (quenched & tempered) — no in-house HT required\n  - N / +N -> normalized — no HT unless drawing explicitly adds a hardness callout\n  - +A -> annealed/soft -> HT required if hardness is specified on the drawing\n  - No condition code -> HT may be required if hardness is specified\n- Batch Size Analysis: If a batch quantity is stated anywhere on the drawing or notes, extract it.\n- Quantity-Driven Input Form: High volume (>500/month) → forging or casting preferred over bar stock; Low volume (<50 pieces) → bar stock + turning preferred.\n- Starting Blank Length / Saw-to-Length Rule: Compute starting_bar_length_mm = envelope_length_mm + 2 × face_stock_per_end (1–2 mm per end) + parting_kerf (≈ 3 mm) + chuck_grip_allowance (10–20 mm typical).\n- Machine Type Selection by Stock Form: OD < ~20 mm AND length-to-diameter ratio > 3 AND bar-stock input → Swiss-type lathe preferred. Larger diameters or shorter L/D → conventional CNC lathe. Prismatic → CNC machining centre.\n- Slenderness Early Flag: Compute part_LD_ratio = envelope_length_mm / max(envelope_diameter_mm, envelope_width_mm). If > 4 → tailstock or steady-rest support required. If > 7 → sliding support mandatory. If > 10 → reduced cutting parameters required.\n\nFinally, determine:\n- part_number, part_name, material, material_condition_code, hardness_hrc (all from the Title Block; append \"(assumed)\" if not legible)\n- recommended_input_form: (e.g., round bar | plate | casting | forging | tube | extrusion | sheet | etc)\n- input_spec: detailed material spec (e.g., \"Ø50mm 4140 steel round bar pre-hardened to 28-32 HRC\")\n- alternatives: array of alternative input forms with brief justification\n- overall_reasoning: Complete final reasoning backing your final material selection.\n\nReturn a JSON object with: part_number, part_name, material, material_condition_code, hardness_hrc, geometry_class_analysis, material_specification_analysis, volume_efficiency_analysis, notes_analysis, standards_analysis, weight_size_analysis, material_condition_analysis, batch_size_analysis, saw_to_length_calculation, machine_type_selection, slenderness_flag, recommended_input_form, input_spec, alternatives, overall_reasoning." }
+        ]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "part_number": { "type": "string" },
+      "part_name": { "type": "string" },
+      "material": { "type": "string" },
+      "material_condition_code": { "type": "string" },
+      "hardness_hrc": { "type": "string" },
+      "geometry_class_analysis": { "type": "string" },
+      "material_specification_analysis": { "type": "string" },
+      "volume_efficiency_analysis": { "type": "string" },
+      "notes_analysis": { "type": "string" },
+      "standards_analysis": { "type": "string" },
+      "weight_size_analysis": { "type": "string" },
+      "material_condition_analysis": { "type": "string" },
+      "batch_size_analysis": { "type": "string" },
+      "saw_to_length_calculation": { "type": "string" },
+      "machine_type_selection": { "type": "string" },
+      "slenderness_flag": { "type": "string" },
+      "recommended_input_form": { "type": "string" },
+      "input_spec": { "type": "string" },
+      "alternatives": { "type": "array", "items": { "type": "string" } },
+      "overall_reasoning": { "type": "string" }
+    },
+    "required": ["part_number", "part_name", "material", "geometry_class_analysis", "material_specification_analysis", "material_condition_analysis", "volume_efficiency_analysis", "saw_to_length_calculation", "machine_type_selection", "slenderness_flag", "notes_analysis", "standards_analysis", "weight_size_analysis", "batch_size_analysis", "recommended_input_form", "input_spec", "alternatives", "overall_reasoning"]
+  },
+  "on_error": "retry:2"
+}

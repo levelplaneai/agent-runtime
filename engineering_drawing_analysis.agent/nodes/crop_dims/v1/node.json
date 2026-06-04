@@ -1,0 +1,24 @@
+{
+  "type": "tool_call",
+  "description": "Crop dimension callout bounding boxes from each view's cropped image",
+  "inputs": {
+    "views": { "from": "$.crop_views.output.views" },
+    "phase4_results": { "from": "$.map_phase4.output.items" },
+    "output_dir": { "from": "$.inputs.output_dir" }
+  },
+  "config": {
+    "tool": "image.crop_dims@v1",
+    "args": {
+      "views": "{{ views }}",
+      "phase4_results": "{{ phase4_results }}",
+      "output_dir": "{{ output_dir }}"
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "all_dims_json": { "type": "string" },
+      "dim_data_by_feature": { "type": "object" }
+    }
+  }
+}

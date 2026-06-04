@@ -1,0 +1,49 @@
+{
+  "type": "prompt",
+  "description": "Extract every dimension callout for all atomic features in a single cropped view",
+  "inputs": {
+    "view_name": { "from": "$.view.view_name" },
+    "view_crop": { "from": "$.view.view_crop_path", "type": "file_path" },
+    "features": { "from": "$.view.features_with_crops" }
+  },
+  "config": {
+    "model": "gemini/gemini-2.5-pro",
+    "max_tokens": 32000,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "image", "input": "view_crop" },
+          { "type": "text", "value": "Cropped View: {{ view_name }}" },
+          { "type": "image_sequence", "input": "features", "label": "Feature: {{ featureName }}", "image_key": "crop_path" },
+          { "type": "text", "value": "Step 5: Feature Dimensions for THIS SPECIFIC VIEW ({{ view_name }}). You MUST use your vision capabilities.\nYour primary goal is to extract EVERY SINGLE CALLOUT AND DIMENSION visible in THIS CROPPED VIEW and map it to its atomic geometric feature. NO DIMENSION MUST BE LEFT BEHIND.\nScan the view systematically (top to bottom, left to right, line by line). Look for any notes, GD&T symbols, geometric tolerances, surface finishes (Ra / Rz / N-grade), angles, threads, depths, and radii.\nATOMIC DESIGN RULE: Capture dimensions at every single local, sub-level.\nCRITICAL RULES FOR ACCURACY:\n- YOU MUST NEVER EXTRACT AN \"OVERALL LENGTH\" OR \"TOTAL WIDTH\".\n- STRICT DE-PLURALIZATION: If a dimension specifies multiple instances (e.g., \"4x Ø10\"), set 'isNewFeature' to true and create separate distinct features for each instance.\n- DO NOT hallucinate, infer, calculate, or assume any dimension not explicitly written with a dimension line in the drawing.\nFor each dimension:\n1. Provide the EXACT dimension text or callout.\n2. Provide a bounding box on the CROPPED VIEW IMAGE (0-1000 scale) that tightly encompasses ONLY the GEOMETRICAL FEATURE (not the dimension text).\n3. Map it to the relevant atomic feature using 'featureName' from the list shown above.\n4. If no feature matches, set 'isNewFeature' to true and create a descriptive geometric featureName.\nReturn a JSON object with a \"dimensions\" array of FeatureDimensionInfo objects: featureName, dimensionLxB, rawTextCallout, dimensionDetails, isNewFeature, ymin, xmin, ymax, xmax." }
+        ]
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "dimensions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "featureName": { "type": "string" },
+            "dimensionLxB": { "type": "string" },
+            "rawTextCallout": { "type": "string" },
+            "dimensionDetails": { "type": "string" },
+            "isNewFeature": { "type": "boolean" },
+            "ymin": { "type": "number" },
+            "xmin": { "type": "number" },
+            "ymax": { "type": "number" },
+            "xmax": { "type": "number" }
+          },
+          "required": ["featureName", "dimensionLxB", "rawTextCallout", "dimensionDetails", "isNewFeature", "ymin", "xmin", "ymax", "xmax"]
+        }
+      }
+    },
+    "required": ["dimensions"]
+  },
+  "on_error": "retry:2"
+}

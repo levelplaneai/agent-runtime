@@ -1,0 +1,32 @@
+{
+  "type": "tool_call",
+  "description": "Crop all detected view regions from the drawing and save each as a PNG file",
+  "inputs": {
+    "drawing_path": { "from": "$.inputs.drawing" },
+    "view_boxes": { "from": "$.phase2a_view_boxes.output.views" },
+    "output_dir": { "from": "$.inputs.output_dir" }
+  },
+  "config": {
+    "tool": "image.crop_views@v1",
+    "args": {
+      "drawing_path": "{{ drawing_path }}",
+      "view_boxes": "{{ view_boxes }}",
+      "output_dir": "{{ output_dir }}"
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "views": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "path": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
