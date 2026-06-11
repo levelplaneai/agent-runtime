@@ -75,8 +75,10 @@ type CompletionRequest struct {
 	MaxTokens    int
 	System       string         // empty = no system prompt
 	Messages     []Message
-	Temperature  *float64       // nil = use provider default
-	OutputSchema map[string]any   // nil = plain text; non-nil = request structured JSON
+	Temperature     *float64       // nil = use provider default
+	ThinkingBudget  *int           // nil=not set; 0=disable thinking; >0=token budget (Gemini, Anthropic)
+	ReasoningEffort *string        // nil=not set; "low"/"medium"/"high" (OpenAI o-series, Gemini)
+	OutputSchema    map[string]any // nil = plain text; non-nil = request structured JSON
 	Tools        []ToolDefinition // nil = single-shot completion; non-nil = agentic tool-use
 	BuiltinTools []BuiltinTool    // provider-hosted tools (e.g. "anthropic:web_search")
 }

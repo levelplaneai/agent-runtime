@@ -32,6 +32,25 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		cfg.MaxOutputTokens = int32(req.MaxTokens)
 	}
 
+	if req.ThinkingBudget != nil || req.ReasoningEffort != nil {
+		tc := &genai.ThinkingConfig{}
+		if req.ThinkingBudget != nil {
+			b := int32(*req.ThinkingBudget)
+			tc.ThinkingBudget = &b
+		}
+		if req.ReasoningEffort != nil {
+			switch *req.ReasoningEffort {
+			case "low":
+				tc.ThinkingLevel = genai.ThinkingLevelLow
+			case "medium":
+				tc.ThinkingLevel = genai.ThinkingLevelMedium
+			case "high":
+				tc.ThinkingLevel = genai.ThinkingLevelHigh
+			}
+		}
+		cfg.ThinkingConfig = tc
+	}
+
 	if req.Temperature != nil {
 		t := float32(*req.Temperature)
 		cfg.Temperature = &t
@@ -40,9 +59,10 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	if req.OutputSchema != nil {
 		cfg.ResponseMIMEType = "application/json"
 		schema, err := mapToGeminiSchema(req.OutputSchema)
-		if err == nil {
-			cfg.ResponseSchema = schema
+		if err != nil {
+			return CompletionResponse{}, fmt.Errorf("gemini: converting output_schema: %w", err)
 		}
+		cfg.ResponseSchema = schema
 	}
 
 	if len(req.Tools) > 0 || len(req.BuiltinTools) > 0 {
@@ -86,7 +106,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	}
 	cand := resp.Candidates[0]
 	if cand.Content == nil {
-		return CompletionResponse{}, fmt.Errorf("gemini: no content in candidate")
+		return CompletionResponse{}, fmt.Errorf("gemini: no content in candidate (finish_reason: %s%s)",
+			cand.FinishReason, finishMsg(cand.FinishMessage))
 	}
 
 	var textContent string
@@ -127,7 +148,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	}
 
 	if textContent == "" {
-		return CompletionResponse{}, fmt.Errorf("gemini: no text or function calls in response")
+		return CompletionResponse{}, fmt.Errorf("gemini: no text or function calls in response (finish_reason: %s%s)",
+			cand.FinishReason, finishMsg(cand.FinishMessage))
 	}
 	return CompletionResponse{Content: textContent, StopReason: "end_turn", BuiltinToolsUsed: builtinToolsUsed}, nil
 }
@@ -193,10 +215,22 @@ func buildGeminiContents(messages []Message) ([]*genai.Content, error) {
 	return contents, nil
 }
 
-// mapToGeminiSchema converts a map[string]any JSON schema to *genai.Schema via
-// round-trip through JSON.
+// mapToGeminiSchema converts a map[string]any JSON schema to *genai.Schema.
+// Standard JSON Schema uses lowercase type names ("object", "string", etc.) but
+// genai.Schema.Type expects uppercase Gemini enum values ("OBJECT", "STRING", etc.).
+// normalizeSchemaTypes walks the map in-place and uppercases all "type" values before
+// the round-trip unmarshal so the API receives the correct casing.
 func mapToGeminiSchema(schema map[string]any) (*genai.Schema, error) {
 	b, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(b, &normalized); err != nil {
+		return nil, err
+	}
+	normalizeSchemaTypes(normalized)
+	b, err = json.Marshal(normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -205,4 +239,36 @@ func mapToGeminiSchema(schema map[string]any) (*genai.Schema, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// normalizeSchemaTypes uppercases all "type" string values in a JSON Schema map
+// to match genai.Type constants (e.g. "object" → "OBJECT", "string" → "STRING").
+func normalizeSchemaTypes(schema map[string]any) {
+	if t, ok := schema["type"].(string); ok {
+		schema["type"] = strings.ToUpper(t)
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for _, v := range props {
+			if sub, ok := v.(map[string]any); ok {
+				normalizeSchemaTypes(sub)
+			}
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		normalizeSchemaTypes(items)
+	}
+	if anyOf, ok := schema["anyOf"].([]any); ok {
+		for _, v := range anyOf {
+			if sub, ok := v.(map[string]any); ok {
+				normalizeSchemaTypes(sub)
+			}
+		}
+	}
+}
+
+func finishMsg(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	return ": " + msg
 }

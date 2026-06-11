@@ -245,17 +245,32 @@ func TestAgenticLoop_ToolsAndOutputSchema(t *testing.T) {
 		}
 	}`
 	node := makeNode(t, nodeJSON)
-	provider := &scriptedProvider{t: t, responses: nil}
+	provider := &scriptedProvider{t: t, responses: []CompletionResponse{
+		{
+			ToolCalls:  []ToolCall{{ID: "tc1", Name: "echo__v1", Input: json.RawMessage(`{"x":"hi"}`)}},
+			StopReason: "tool_use",
+		},
+		{
+			Content:    `{"result":"done"}`,
+			StopReason: "end_turn",
+		},
+	}}
 
-	_, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
-	if err == nil {
-		t.Fatal("expected error when tools and output_schema both set")
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, reg, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("expected 'mutually exclusive' in error, got %q", err.Error())
+	if out["result"] != "done" {
+		t.Errorf("unexpected output: %v", out)
 	}
-	if provider.idx != 0 {
-		t.Error("no LLM calls should have been made")
+	if provider.idx != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", provider.idx)
+	}
+	// Both turns must carry the output schema.
+	for i, call := range provider.calls {
+		if call.OutputSchema == nil {
+			t.Errorf("call %d: OutputSchema was nil, expected it to be set", i)
+		}
 	}
 }
 

@@ -141,6 +141,12 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 - Add `"tools": ["tool_name@v1"]` and optional `"max_tool_iterations": 10` to let the LLM call tools.
 - To pass a file as multimodal content (image or document), declare the input with `"type": "file_path"`. The runtime reads the file and appends it as a content block after the user message text. Works with any `FileValue` supplied at flow startup (via `--input key=@path`) or with a path string produced by an earlier `tool_call` node using `"type": "file_path"`.
 
+**Generation parameters (all optional):**
+- `"max_tokens": 16000` — maximum output tokens (default 16000).
+- `"temperature": 0.7` — sampling temperature.
+- `"thinking_budget": 8000` — token budget for extended thinking. `0` disables thinking (useful on Gemini to prevent the model from using its reasoning budget). Positive values enable thinking with that token budget. Supported by Gemini thinking models and Anthropic (minimum 1024; must be less than `max_tokens`). Ignored on OpenAI.
+- `"reasoning_effort": "low"` — effort level for reasoning: `"low"`, `"medium"`, or `"high"`. Supported by OpenAI o-series models and Gemini thinking models. Ignored for other providers.
+
 ---
 
 ### `tool_call` — deterministic tool invocation
@@ -222,7 +228,10 @@ Each `when` is a structured condition object with three fields:
     "decide_with": {
       "model": "anthropic/claude-haiku-4-5-20251001",
       "prompt": "./classify.md",
-      "choices": ["standard", "custom", "unclear"]
+      "choices": ["standard", "custom", "unclear"],
+      "max_tokens": 8192,
+      "thinking_budget": 0,
+      "reasoning_effort": "low"
     },
     "branches": [
       { "when": { "field": "decision", "op": "eq", "value": "standard" }, "goto": "standard_flow" },
@@ -232,6 +241,8 @@ Each `when` is a structured condition object with three fields:
   }
 }
 ```
+
+The `decide_with` block supports the same generation parameters as `prompt` nodes: `max_tokens` (default 8192), `thinking_budget`, and `reasoning_effort`. These are especially useful when routing with a thinking model — set `"thinking_budget": 0` to disable thinking for simple classification calls, or increase `max_tokens` to give thinking models enough budget to emit their output.
 
 Branches evaluated in order; first match wins. Routers own their routing via `goto` — they do **not** appear in `edges`.
 

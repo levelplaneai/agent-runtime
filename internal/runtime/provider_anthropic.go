@@ -52,8 +52,30 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req CompletionRequest)
 		}
 	}
 
+	if req.ThinkingBudget != nil {
+		b := *req.ThinkingBudget
+		if b == 0 {
+			params.Thinking = anthropic.ThinkingConfigParamUnion{
+				OfDisabled: &anthropic.ThinkingConfigDisabledParam{},
+			}
+		} else {
+			if b < 1024 {
+				return CompletionResponse{}, fmt.Errorf("anthropic: thinking_budget must be >= 1024, got %d", b)
+			}
+			if b >= req.MaxTokens {
+				return CompletionResponse{}, fmt.Errorf("anthropic: thinking_budget (%d) must be less than max_tokens (%d)", b, req.MaxTokens)
+			}
+			params.Thinking = anthropic.ThinkingConfigParamUnion{
+				OfEnabled: &anthropic.ThinkingConfigEnabledParam{BudgetTokens: int64(b)},
+			}
+		}
+	}
+
 	if req.Temperature != nil {
-		params.Temperature = anthropic.Float(*req.Temperature)
+		// Extended thinking requires temperature to be unset.
+		if params.Thinking.OfEnabled == nil {
+			params.Temperature = anthropic.Float(*req.Temperature)
+		}
 	}
 
 	if len(req.Tools) > 0 || len(req.BuiltinTools) > 0 {

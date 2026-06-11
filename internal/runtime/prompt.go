@@ -56,10 +56,6 @@ func ExecutePrompt(
 		return nil, fmt.Errorf("prompt node: %w", err)
 	}
 
-	if (len(toolDefs) > 0 || len(builtins) > 0) && len(node.OutputSchema) > 0 {
-		return nil, fmt.Errorf("prompt node: tools and output_schema are mutually exclusive")
-	}
-
 	// Cross-provider validation: built-in tool prefix must match the model's provider.
 	modelPrefix := strings.SplitN(req.Model, "/", 2)[0]
 	for _, bt := range builtins {
@@ -352,9 +348,19 @@ func buildCompletionRequest(
 	inputs map[string]any,
 	model string,
 ) (CompletionRequest, error) {
+	maxTokens := 16000
+	if v, ok, err := configInt(node.Config, "max_tokens"); err != nil {
+		return CompletionRequest{}, fmt.Errorf("max_tokens: %w", err)
+	} else if ok {
+		if v <= 0 {
+			return CompletionRequest{}, fmt.Errorf("config.max_tokens must be a positive integer, got %d", v)
+		}
+		maxTokens = v
+	}
+
 	req := CompletionRequest{
 		Model:     model,
-		MaxTokens: 16000,
+		MaxTokens: maxTokens,
 	}
 
 	// --- System prompt ---
@@ -391,6 +397,30 @@ func buildCompletionRequest(
 		var temp float64
 		if err := json.Unmarshal(raw, &temp); err == nil {
 			req.Temperature = &temp
+		}
+	}
+
+	// --- Optional thinking_budget ---
+	if v, ok, err := configInt(node.Config, "thinking_budget"); err != nil {
+		return req, fmt.Errorf("thinking_budget: %w", err)
+	} else if ok {
+		if v < 0 {
+			return req, fmt.Errorf("config.thinking_budget must be >= 0, got %d", v)
+		}
+		req.ThinkingBudget = &v
+	}
+
+	// --- Optional reasoning_effort ---
+	if raw, ok := node.Config["reasoning_effort"]; ok {
+		var effort string
+		if err := json.Unmarshal(raw, &effort); err != nil {
+			return req, fmt.Errorf("config.reasoning_effort must be a string: %w", err)
+		}
+		switch effort {
+		case "low", "medium", "high":
+			req.ReasoningEffort = &effort
+		default:
+			return req, fmt.Errorf("config.reasoning_effort must be \"low\", \"medium\", or \"high\", got %q", effort)
 		}
 	}
 
@@ -587,6 +617,12 @@ func requestToTrace(req CompletionRequest) map[string]any {
 	}
 	if req.Temperature != nil {
 		m["temperature"] = *req.Temperature
+	}
+	if req.ThinkingBudget != nil {
+		m["thinking_budget"] = *req.ThinkingBudget
+	}
+	if req.ReasoningEffort != nil {
+		m["reasoning_effort"] = *req.ReasoningEffort
 	}
 	return m
 }

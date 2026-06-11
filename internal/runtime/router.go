@@ -37,9 +37,12 @@ type Branch struct {
 
 // decideWith holds the parsed config for an LLM-based router.
 type decideWith struct {
-	Model   string   `json:"model"`
-	Prompt  string   `json:"prompt"`
-	Choices []string `json:"choices"`
+	Model           string   `json:"model"`
+	Prompt          string   `json:"prompt"`
+	Choices         []string `json:"choices"`
+	MaxTokens       int      `json:"max_tokens,omitempty"`
+	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
+	ReasoningEffort *string  `json:"reasoning_effort,omitempty"`
 }
 
 var knownOps = map[string]bool{
@@ -125,6 +128,16 @@ func executeLLMDecision(
 	if len(dw.Choices) == 0 {
 		return "", "", fmt.Errorf("decide_with.choices must not be empty")
 	}
+	if dw.ReasoningEffort != nil {
+		switch *dw.ReasoningEffort {
+		case "low", "medium", "high":
+		default:
+			return "", "", fmt.Errorf("decide_with.reasoning_effort must be \"low\", \"medium\", or \"high\", got %q", *dw.ReasoningEffort)
+		}
+	}
+	if dw.ThinkingBudget != nil && *dw.ThinkingBudget < 0 {
+		return "", "", fmt.Errorf("decide_with.thinking_budget must be >= 0, got %d", *dw.ThinkingBudget)
+	}
 
 	// Load classify prompt — file reference or inline string.
 	promptText := dw.Prompt
@@ -153,12 +166,20 @@ func executeLLMDecision(
 		userMsg = Message{Role: "user", Blocks: blocks}
 	}
 
+	maxTokens := 8192
+	if dw.MaxTokens > 0 {
+		maxTokens = dw.MaxTokens
+	}
+
 	temp := 0.0
 	req := CompletionRequest{
-		Model:       dw.Model,
-		MaxTokens:   256,
-		Messages:    []Message{userMsg},
-		Temperature: &temp,
+		Model:           dw.Model,
+		MaxTokens:       maxTokens,
+		System:          "You are a classification assistant. Respond ONLY with valid JSON matching the requested schema. Do not include any explanation, preamble, or markdown formatting.",
+		Messages:        []Message{userMsg},
+		Temperature:     &temp,
+		ThinkingBudget:  dw.ThinkingBudget,
+		ReasoningEffort: dw.ReasoningEffort,
 		OutputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -193,8 +214,9 @@ func executeLLMDecision(
 	var out struct {
 		Decision string `json:"decision"`
 	}
-	if err := json.Unmarshal([]byte(resp.Content), &out); err != nil {
-		return "", "", fmt.Errorf("parsing LLM response: %w", err)
+	jsonText := extractJSON(resp.Content)
+	if err := json.Unmarshal([]byte(jsonText), &out); err != nil {
+		return "", "", fmt.Errorf("parsing LLM response: %w; content: %s", err, resp.Content)
 	}
 
 	// Validate the model's choice is one of the declared options.
@@ -210,6 +232,27 @@ func executeLLMDecision(
 	}
 
 	return out.Decision, dw.Model, nil
+}
+
+// extractJSON returns the first JSON object found in s.
+// If s is already valid JSON it is returned as-is; otherwise it looks for a
+// ```…``` or ```json…``` code fence and returns the content inside it.
+func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 0 && s[0] == '{' {
+		return s
+	}
+	// Strip a leading ```json or ``` fence.
+	for _, fence := range []string{"```json", "```"} {
+		if idx := strings.Index(s, fence); idx != -1 {
+			s = s[idx+len(fence):]
+			if end := strings.Index(s, "```"); end != -1 {
+				s = s[:end]
+			}
+			return strings.TrimSpace(s)
+		}
+	}
+	return s
 }
 
 func parseBranches(config map[string]json.RawMessage) ([]Branch, error) {

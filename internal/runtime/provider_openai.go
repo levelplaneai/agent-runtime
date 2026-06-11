@@ -29,8 +29,12 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 	}
 
 	params := openai.ChatCompletionNewParams{
-		Model:     openai.ChatModel(req.Model),
-		MaxTokens: openai.Int(int64(req.MaxTokens)),
+		Model: openai.ChatModel(req.Model),
+	}
+	if isOSeriesModel(req.Model) {
+		params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
+	} else {
+		params.MaxTokens = openai.Int(int64(req.MaxTokens))
 	}
 
 	var msgs []openai.ChatCompletionMessageParamUnion
@@ -60,6 +64,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
+	}
+
+	if req.ReasoningEffort != nil && isOSeriesModel(req.Model) {
+		switch *req.ReasoningEffort {
+		case "low":
+			params.ReasoningEffort = shared.ReasoningEffortLow
+		case "medium":
+			params.ReasoningEffort = shared.ReasoningEffortMedium
+		case "high":
+			params.ReasoningEffort = shared.ReasoningEffortHigh
+		}
 	}
 
 	if len(req.Tools) > 0 {
@@ -181,6 +196,13 @@ func hasBlockType(blocks []ContentBlock, typ string) bool {
 		}
 	}
 	return false
+}
+
+// isOSeriesModel reports whether a bare model name is an OpenAI o-series reasoning
+// model (o1, o3, o4-mini, etc.) that uses MaxCompletionTokens instead of MaxTokens
+// and supports ReasoningEffort.
+func isOSeriesModel(model string) bool {
+	return len(model) >= 2 && model[0] == 'o' && model[1] >= '1' && model[1] <= '9'
 }
 
 // openaiContentParts converts ContentBlocks to OpenAI chat content parts.

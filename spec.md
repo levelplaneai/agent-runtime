@@ -206,6 +206,15 @@ LLM call with templated messages.
 - `system` and `user` can be inline strings in config; if omitted the runtime loads `system.prompt` / `user.prompt` from the node version directory if present.
 - For multi-turn, use `messages: [...]` instead of `system`/`user`.
 
+**Generation parameters (all optional):**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_tokens` | integer | 16000 | Maximum output tokens. |
+| `temperature` | number | provider default | Sampling temperature. |
+| `thinking_budget` | integer | — | Thinking token budget. `0` = disable thinking. Positive = budget in tokens. Supported by Gemini thinking models and Anthropic (minimum 1024 when enabled; must be less than `max_tokens`). |
+| `reasoning_effort` | string | — | `"low"`, `"medium"`, or `"high"`. Supported by OpenAI o-series models and Gemini thinking models. Ignored for other providers. |
+
 **Tools available during the prompt (optional):**
 
 A `prompt` node can declare tools the LLM is allowed to call during inference. The runtime handles the tool-use loop internally — calls model, executes any tool calls, feeds results back, repeats until the model produces output matching `output_schema` or hits `max_tool_iterations`.
@@ -337,7 +346,10 @@ Conditional branching. Two flavors share one node type.
     "decide_with": {
       "model": "anthropic/claude-haiku-4-5",
       "prompt": "./classify.md",
-      "choices": ["standard", "custom_machining", "assembly", "unclear"]
+      "choices": ["standard", "custom_machining", "assembly", "unclear"],
+      "max_tokens": 8192,
+      "thinking_budget": 0,
+      "reasoning_effort": "low"
     },
     "branches": [
       { "when": "$.decision == 'standard'", "goto": "standard_flow" },
@@ -348,6 +360,17 @@ Conditional branching. Two flavors share one node type.
   }
 }
 ```
+
+**`decide_with` fields:**
+
+| Key | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `model` | yes | — | Provider/model string. |
+| `prompt` | yes | — | Inline prompt string or `./relative` path to a `.md` file. |
+| `choices` | yes | — | Array of strings the model must choose from. |
+| `max_tokens` | no | 8192 | Maximum output tokens for the classification call. |
+| `thinking_budget` | no | — | Same semantics as on `prompt` nodes. Useful for thinking models. |
+| `reasoning_effort` | no | — | Same semantics as on `prompt` nodes. |
 
 Routers transfer control via `goto`. They do **not** appear in the top-level `edges` array.
 
