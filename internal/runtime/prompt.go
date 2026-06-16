@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
@@ -92,7 +93,7 @@ func ExecutePrompt(
 		for _, name := range resp.BuiltinToolsUsed {
 			t.Emit(TraceEvent{Event: "builtin_tool_used", Node: nodeName, Tool: name})
 		}
-		return extractOutput(resp)
+		return extractOrHaiku(ctx, resp, node.OutputSchema)
 	}
 
 	// --- agentic tool-use loop ---
@@ -131,7 +132,7 @@ func ExecutePrompt(
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			return extractOutput(resp)
+			return extractOrHaiku(ctx, resp, node.OutputSchema)
 		}
 
 		// Append assistant turn with tool_use blocks (and optional text prefix).
@@ -384,12 +385,13 @@ func buildCompletionRequest(
 	req.Messages = messages
 
 	// --- Structured output schema ---
+	// Don't pass the schema to the provider API — that lets the model bail out
+	// with empty/zero values that satisfy the schema. Instead, append the schema
+	// to the system prompt so the model knows the expected format, and use a
+	// separate Haiku call after the final response to reliably extract JSON.
 	if len(node.OutputSchema) > 0 {
-		schema, err := rawSchemaToMap(node.OutputSchema)
-		if err != nil {
-			return req, fmt.Errorf("converting output_schema: %w", err)
-		}
-		req.OutputSchema = schema
+		schemaBytes, _ := json.Marshal(node.OutputSchema)
+		req.System += "\n\n---\nOutput schema (JSON):\n" + string(schemaBytes)
 	}
 
 	// --- Optional temperature ---
@@ -596,14 +598,91 @@ func rawSchemaToMap(schema map[string]json.RawMessage) (map[string]any, error) {
 }
 
 // extractOutput parses the provider response content and returns a map.
-// With a structured schema the content is expected to be valid JSON.
 // When no schema was declared the raw text is returned under the "text" key.
 func extractOutput(resp CompletionResponse) (map[string]any, error) {
+	if resp.StopReason == "max_tokens" {
+		return nil, fmt.Errorf("LLM output was truncated (stop_reason: max_tokens); increase max_tokens in node config or simplify the prompt")
+	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(resp.Content), &out); err != nil {
 		return map[string]any{"text": resp.Content}, nil
 	}
 	return out, nil
+}
+
+// extractOrHaiku routes to extractWithHaiku when the node has an output schema,
+// falling back to plain extractOutput for nodes without one.
+func extractOrHaiku(ctx context.Context, resp CompletionResponse, schema map[string]json.RawMessage) (map[string]any, error) {
+	if resp.StopReason == "max_tokens" {
+		return nil, fmt.Errorf("LLM output was truncated (stop_reason: max_tokens); increase max_tokens in node config or simplify the prompt")
+	}
+	if len(schema) == 0 {
+		return extractOutput(resp)
+	}
+	return extractWithHaiku(ctx, resp.Content, schema)
+}
+
+// parseJSONFlexible tries to parse text as a JSON object, handling common
+// model habits like markdown code fences or leading/trailing prose.
+func parseJSONFlexible(text string) (map[string]any, bool) {
+	text = strings.TrimSpace(text)
+	// Strip ```json ... ``` or ``` ... ``` fences.
+	if strings.HasPrefix(text, "```") {
+		text = strings.TrimPrefix(text, "```json")
+		text = strings.TrimPrefix(text, "```")
+		if idx := strings.LastIndex(text, "```"); idx >= 0 {
+			text = text[:idx]
+		}
+		text = strings.TrimSpace(text)
+	}
+	// Try direct parse first.
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err == nil {
+		return out, true
+	}
+	// Find the first '{' and last '}' and try parsing that slice.
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(text[start:end+1]), &out); err == nil {
+			return out, true
+		}
+	}
+	return nil, false
+}
+
+// extractWithHaiku uses a single-shot Claude Haiku call to parse the main
+// model's final response into JSON matching the node's output schema.
+// We rely on a clear prompt rather than OutputConfig — complex schemas exceed
+// Anthropic's grammar compiler limits, so structured output isn't used here.
+func extractWithHaiku(ctx context.Context, rawContent string, schema map[string]json.RawMessage) (map[string]any, error) {
+	schemaBytes, _ := json.Marshal(schema)
+
+	client := anthropic.NewClient()
+	resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.ModelClaudeHaiku4_5_20251001,
+		MaxTokens: 8192,
+		System: []anthropic.TextBlockParam{{
+			Text: "You are a JSON extraction assistant. Given a raw text response and a JSON schema, extract the structured data and return ONLY valid JSON matching the schema. No explanation, no markdown, no code fences.",
+		}},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(
+				"Schema:\n" + string(schemaBytes) + "\n\nText to extract from:\n" + rawContent,
+			)),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("haiku extraction: %w", err)
+	}
+
+	for _, block := range resp.Content {
+		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
+			if out, ok := parseJSONFlexible(tb.Text); ok {
+				return out, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("haiku extraction: no valid JSON in response")
 }
 
 // requestToTrace converts a CompletionRequest into a map suitable for trace Inputs.

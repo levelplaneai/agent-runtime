@@ -62,17 +62,29 @@ func (r *Registry) Lookup(ref string) (Tool, bundle.ToolSignature, bool) {
 }
 
 // MissingTools returns refs from manifest.tools_required that have no registered tool.
+// Built-in provider tools ("provider:name" format) are handled natively by the LLM
+// provider and are never registered in the registry, so they are skipped.
 // Call this after registering all tools and before running a bundle.
 func (r *Registry) MissingTools(b *bundle.Bundle) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var missing []string
 	for _, ref := range b.Manifest.ToolsRequired {
+		if isBuiltinToolRef(ref) {
+			continue
+		}
 		if _, ok := r.tools[ref]; !ok {
 			missing = append(missing, ref)
 		}
 	}
 	return missing
+}
+
+// isBuiltinToolRef reports whether ref is a provider-managed built-in tool
+// in "provider:name" format (e.g. "gemini:code_execution", "anthropic:web_search").
+func isBuiltinToolRef(ref string) bool {
+	parts := strings.SplitN(ref, ":", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.Contains(parts[1], "@")
 }
 
 // validRef reports whether s is a non-empty "name@version" string.

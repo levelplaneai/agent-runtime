@@ -206,9 +206,8 @@ func enforceAdditionalProperties(schema map[string]any) map[string]any {
 	}
 
 	if out["type"] == "object" {
-		if _, exists := out["additionalProperties"]; !exists {
-			out["additionalProperties"] = false
-		}
+		// Anthropic only accepts false here — not a schema object.
+		out["additionalProperties"] = false
 		if props, ok := out["properties"].(map[string]any); ok {
 			newProps := make(map[string]any, len(props))
 			for k, v := range props {
