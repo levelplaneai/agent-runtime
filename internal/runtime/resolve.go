@@ -54,7 +54,7 @@ func Resolve(ctx *ExecutionContext, path string) (any, error) {
 		}
 		output, ok := ctx.NodeOutput(root)
 		if !ok {
-			return nil, fmt.Errorf("path %q: no output recorded for node %q", path, root)
+			return nil, nil // node didn't execute (unreachable branch) — return null
 		}
 		if len(parts) > 2 {
 			return traverse(output, parts[2:], path)

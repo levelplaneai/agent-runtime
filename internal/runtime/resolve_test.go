@@ -29,7 +29,8 @@ func TestResolve(t *testing.T) {
 		{"$.inputs", nil, true},             // bare $.inputs
 		{"$.extract_items", nil, true},      // missing .output
 		{"$.inputs.missing", nil, true},     // unknown input field
-		{"$.missing_node.output", nil, true}, // no output recorded
+		{"$.missing_node.output", nil, false},       // node didn't run → null (not error)
+		{"$.missing_node.output.field", nil, false}, // nested path on unexecuted node → null
 		{"$.inputs.rfq_document.sub", nil, true}, // traversal into string
 	}
 

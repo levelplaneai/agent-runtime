@@ -87,11 +87,19 @@ func ExecuteRouter(ctx context.Context, localName string, node bundle.Node, node
 		})
 	}
 
+	buildResult := func(gotoTarget string) map[string]any {
+		result := map[string]any{"_goto": gotoTarget}
+		if d, ok := resolved["decision"]; ok {
+			result["decision"] = d
+		}
+		return result
+	}
+
 	t := tracerFrom(ctx)
 	for _, b := range branches {
 		if b.Default {
 			t.Emit(TraceEvent{Event: "router_branch", Node: localName, ChosenTarget: b.Goto})
-			return map[string]any{"_goto": b.Goto}, nil
+			return buildResult(b.Goto), nil
 		}
 		match, err := evalCondition(b.When, resolved)
 		if err != nil {
@@ -99,7 +107,7 @@ func ExecuteRouter(ctx context.Context, localName string, node bundle.Node, node
 		}
 		if match {
 			t.Emit(TraceEvent{Event: "router_branch", Node: localName, Condition: b.When.String(), ChosenTarget: b.Goto})
-			return map[string]any{"_goto": b.Goto}, nil
+			return buildResult(b.Goto), nil
 		}
 	}
 	return nil, fmt.Errorf("router: no branch matched and no default branch set")
