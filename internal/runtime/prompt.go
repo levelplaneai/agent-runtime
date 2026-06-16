@@ -619,6 +619,10 @@ func extractOrHaiku(ctx context.Context, resp CompletionResponse, schema map[str
 	if len(schema) == 0 {
 		return extractOutput(resp)
 	}
+	// If the model already returned valid JSON, skip the Haiku call.
+	if out, ok := parseJSONFlexible(resp.Content); ok {
+		return out, nil
+	}
 	return extractWithHaiku(ctx, resp.Content, schema)
 }
 

@@ -266,10 +266,10 @@ func TestAgenticLoop_ToolsAndOutputSchema(t *testing.T) {
 	if provider.idx != 2 {
 		t.Errorf("expected 2 LLM calls, got %d", provider.idx)
 	}
-	// Both turns must carry the output schema.
+	// Schema is appended to the system prompt, not set on the request.
 	for i, call := range provider.calls {
-		if call.OutputSchema == nil {
-			t.Errorf("call %d: OutputSchema was nil, expected it to be set", i)
+		if call.OutputSchema != nil {
+			t.Errorf("call %d: OutputSchema should not be set on request (schema is in system prompt)", i)
 		}
 	}
 }

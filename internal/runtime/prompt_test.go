@@ -151,14 +151,15 @@ func TestBuildCompletionRequest_SystemAndUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if req.System != "You are a test assistant." {
+	wantSystem := "You are a test assistant.\n\n---\nOutput schema (JSON):\n{\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"],\"type\":\"object\"}"
+	if req.System != wantSystem {
 		t.Errorf("unexpected system: %q", req.System)
 	}
 	if len(req.Messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(req.Messages))
 	}
-	if req.OutputSchema == nil {
-		t.Error("expected OutputSchema to be set")
+	if req.OutputSchema != nil {
+		t.Error("expected OutputSchema to not be set (schema is appended to system prompt)")
 	}
 	if req.Model != "anthropic/claude-haiku-4-5" {
 		t.Errorf("unexpected model: %q", req.Model)
