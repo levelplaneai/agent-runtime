@@ -48,9 +48,10 @@ type Node struct {
 }
 
 type ToolSignature struct {
-	Description    string             `json:"description"`
-	InputSchema    json.RawMessage    `json:"input_schema"`
-	OutputSchema   json.RawMessage    `json:"output_schema"`
+	Description    string          `json:"description"`
+	InputSchema    json.RawMessage `json:"input_schema"`
+	OutputSchema   json.RawMessage `json:"output_schema"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"` // 0 = use default (30 s)
 }
 
 // Bundle is the fully loaded in-memory representation of a .agent directory.

@@ -13,6 +13,20 @@ import (
 	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
+// configOptionalString extracts a JSON string from a node's config map.
+// Returns ("", false, nil) when the key is absent.
+func configOptionalString(config map[string]json.RawMessage, key string) (string, bool, error) {
+	raw, ok := config[key]
+	if !ok {
+		return "", false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", true, fmt.Errorf("config field %q must be a string: %w", key, err)
+	}
+	return s, true, nil
+}
+
 // ExecuteToolCall runs a tool_call node against the execution context.
 //
 // It:
@@ -37,9 +51,16 @@ func ExecuteToolCall(ctx context.Context, node bundle.Node, execCtx *ExecutionCo
 		return nil, fmt.Errorf("tool_call node %q: %w", toolRef, err)
 	}
 
-	tool, _, ok := reg.Lookup(toolRef)
+	tool, sig, ok := reg.Lookup(toolRef)
 	if !ok {
 		return nil, fmt.Errorf("tool_call node: tool %q not found in registry", toolRef)
+	}
+
+	// Apply per-tool timeout from the tool signature when set.
+	if sig.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(sig.TimeoutSeconds)*time.Second)
+		defer cancel()
 	}
 
 	t := tracerFrom(ctx)
@@ -69,13 +90,28 @@ func resolveNodeInputs(node bundle.Node, execCtx *ExecutionContext) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("resolving input %q: %w", name, err)
 		}
-		if binding.Type == "file_path" {
+		switch binding.Type {
+		case "file_path":
 			fv, err := loadFileValue(val)
 			if err != nil {
 				return nil, fmt.Errorf("resolving input %q: %w", name, err)
 			}
 			resolved[name] = fv
-		} else {
+		case "file_path_array":
+			raw, ok := val.([]any)
+			if !ok {
+				return nil, fmt.Errorf("resolving input %q: \"file_path_array\" requires an array, got %T", name, val)
+			}
+			fvs := make([]FileValue, 0, len(raw))
+			for i, elem := range raw {
+				fv, err := loadFileValue(elem)
+				if err != nil {
+					return nil, fmt.Errorf("resolving input %q[%d]: %w", name, i, err)
+				}
+				fvs = append(fvs, fv)
+			}
+			resolved[name] = fvs
+		default:
 			resolved[name] = val
 		}
 	}

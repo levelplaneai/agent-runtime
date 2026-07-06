@@ -181,6 +181,19 @@ func openaiEncodeMessage(m Message) ([]openai.ChatCompletionMessageParamUnion, e
 			}
 			return []openai.ChatCompletionMessageParamUnion{{OfAssistant: asst}}, nil
 		}
+		if m.Blocks != nil {
+			// OpenAI's assistant message content only supports text (and refusal)
+			// parts — no images/documents. Concatenate text blocks; reject anything
+			// else instead of silently dropping the turn.
+			var sb strings.Builder
+			for _, b := range m.Blocks {
+				if b.Type != "text" {
+					return nil, fmt.Errorf("openai: assistant content block type %q is not supported (only text)", b.Type)
+				}
+				sb.WriteString(b.Text)
+			}
+			return []openai.ChatCompletionMessageParamUnion{openai.AssistantMessage(sb.String())}, nil
+		}
 		return []openai.ChatCompletionMessageParamUnion{openai.AssistantMessage(m.Content)}, nil
 
 	default:

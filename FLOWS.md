@@ -106,8 +106,11 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 |---|---|
 | _(omitted)_ | Value is passed through as-is (string, number, object, array) |
 | `"file_path"` | Resolved value must be a string path; runtime reads the file and wraps it in a `FileValue` (binary + MIME type). On `prompt` nodes the file is sent as a multimodal image or document block. |
+| `"file_path_array"` | Resolved value must be an array of string paths; each is loaded into a `FileValue` the same way as `"file_path"`, producing `[]FileValue`. On `prompt` nodes each element is sent as its own multimodal content block. |
 
 `file_path` is useful when an earlier `tool_call` node produces a file (e.g. a cropped image) and a downstream `prompt` node needs to send it to the model as multimodal content. The MIME type is detected automatically from the file extension (`.png` → `image/png`, `.pdf` → `application/pdf`, etc.). A missing or unreadable file surfaces as a node error and is subject to `on_error`.
+
+`file_path_array` is the same idea for a list of files, e.g. a set of cropped views produced by an earlier `map` or `tool_call` node.
 
 ---
 
@@ -140,6 +143,40 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 - Omit `system`/`user` to load `system.prompt`/`user.prompt` files from the same directory.
 - Add `"tools": ["tool_name@v1"]` and optional `"max_tool_iterations": 10` to let the LLM call tools.
 - To pass a file as multimodal content (image or document), declare the input with `"type": "file_path"`. The runtime reads the file and appends it as a content block after the user message text. Works with any `FileValue` supplied at flow startup (via `--input key=@path`) or with a path string produced by an earlier `tool_call` node using `"type": "file_path"`.
+- `"max_tokens"` (optional, default `16000`) caps the model's response length. Must be a positive integer; malformed or non-positive values are a validation error rather than a silent fallback.
+- `"temperature"` (optional) must be a number when present; malformed values are a validation error.
+
+### Multi-turn messages (`config.messages`)
+
+Instead of a single `system`/`user` pair, a prompt node can declare an explicit turn sequence:
+
+```json
+{
+  "config": {
+    "model": "anthropic/claude-haiku-4-5-20251001",
+    "messages": [
+      { "role": "user", "content": "Here is the original diagram:" },
+      { "role": "user", "content": [
+        { "type": "text", "value": "Original Diagram:" },
+        { "type": "image", "input": "drawing" }
+      ]},
+      { "role": "assistant", "content": "Understood." },
+      { "role": "user", "content": [
+        { "type": "image_sequence", "input": "crops", "label": "View: {{ name }}", "image_key": "path" }
+      ]}
+    ]
+  }
+}
+```
+
+Each turn's `content` is either:
+- a plain string — rendered with `{{ name }}` templates, same as `config.user`.
+- an array of content items, for interleaving text and images within one turn:
+  - `{"type": "text", "value": "..."}` — rendered text block.
+  - `{"type": "image", "input": "<name>"}` — `<name>` must resolve to a `FileValue` (an input bound with `"type": "file_path"`).
+  - `{"type": "image_sequence", "input": "<name>", "label": "...", "image_key": "..."}` — `<name>` resolves to a `[]FileValue` (a `"file_path_array"` input) or a `[]any` of objects. Emits an optional rendered `label` followed by an image, per element. For `[]any` objects, `image_key` names the field holding the file path, and other object fields are exposed as `{{ field }}` in `label`.
+
+Assistant turns are for supplying few-shot history — only plain text (string or a text-only content array) is guaranteed to work across all providers; image/document blocks on an `assistant` turn are rejected on OpenAI (the Chat Completions API has no multimodal assistant content).
 
 **Generation parameters (all optional):**
 - `"max_tokens": 16000` — maximum output tokens (default 16000).
@@ -193,6 +230,40 @@ Tool must be in `manifest.tools_required`.
 - `do` references a local node name from the flow's `nodes` map.
 - Inside the `do` node, the item is available as `$.item` (or whatever `as` is set to).
 - `concurrency`: integer or `"unlimited"` (default `1`).
+
+---
+
+### `loop` — sequential iteration with a dynamically growing queue
+
+```json
+{
+  "type": "loop",
+  "description": "Verify each feature, following up on features discovered mid-verification",
+  "config": {
+    "over": "$.phase4.output.names",
+    "as": "feature_name",
+    "do": "verify_feature",
+    "append_from": "new_features",
+    "accumulate": "verifications",
+    "max_iterations": 200
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": { "verifications": { "type": "array", "items": { "type": "object" } } }
+  }
+}
+```
+
+Unlike `map`, `loop` runs strictly sequentially and its queue can grow while it runs: after each iteration, if the `do` node's output has a non-empty array at the key named by `append_from`, those items are appended to the end of the queue and processed in turn. This models a feedback loop where each iteration can discover new work (e.g. verifying a feature surfaces a related feature that also needs verifying).
+
+| Field | Required | Notes |
+|---|---|---|
+| `over` | yes | path to the initial `[]any` queue |
+| `as` | yes | iteration variable name, accessible as `$.<as>` in the `do` node |
+| `do` | yes | local node name to execute per item |
+| `append_from` | no | key in the `do` node's output holding `[]any` of newly discovered items to enqueue |
+| `accumulate` | no | key name for the collected results in the loop's output (default `"items"`) |
+| `max_iterations` | no | hard cap on total items processed, default `1000`. Guards against a `do` node (typically an LLM) that keeps returning new items forever — the loop errors out once the cap is hit rather than growing unbounded |
 
 ---
 
@@ -296,11 +367,13 @@ The target flow's `inputs`/`outputs` define the contract.
 | `$.inputs.<field>` | flow input |
 | `$.<node_name>.output` | a node's full output |
 | `$.<node_name>.output.<path>` | drill into a node's output |
-| `$.<as_name>` | iteration variable inside a `map` (the whole item) |
+| `$.<as_name>` | iteration variable inside a `map` or `loop` (the whole item) |
 | `$.<as_name>.<field>` | field of an iteration variable (e.g. `$.region.path`) |
 | `$.decision` | LLM router's chosen branch (inside router only) |
 
-Used in: `inputs[*].from`, `outputs[*].from`, `router.branches[*].when`, `map.config.over`.
+Used in: `inputs[*].from`, `outputs[*].from`, `router.branches[*].when`, `map.config.over`, `loop.config.over`.
+
+Avoid naming a `map`/`loop` `as` value `inputs` — `$.inputs.<field>` is always resolved as a flow input first, so a nested path into an iteration variable named `inputs` is unreachable (only the bare `$.inputs`, with no further path, would resolve to the current item).
 
 ---
 

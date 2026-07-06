@@ -209,6 +209,8 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 			return r.executeParallel(ctx, localName, node)
 		case "subflow":
 			return r.executeSubflow(ctx, localName, node)
+		case "loop":
+			return r.executeLoop(ctx, localName, node)
 		default:
 			return nil, fmt.Errorf("unknown node type %q", node.Type)
 		}
