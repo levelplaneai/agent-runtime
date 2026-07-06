@@ -19,11 +19,15 @@ import (
 //
 // Config fields:
 //
-//	over        (required) — path to the initial []any queue, e.g. "$.phase4.output.names"
-//	as          (required) — iteration variable name, accessible as $.name in the do-node
-//	do          (required) — local node name to execute per item
-//	append_from (optional) — key in the do-node output that holds []any of new items
-//	accumulate  (optional) — key name in the loop output for collected results (default "items")
+//	over           (required) — path to the initial []any queue, e.g. "$.phase4.output.names"
+//	as             (required) — iteration variable name, accessible as $.name in the do-node
+//	do             (required) — local node name to execute per item
+//	append_from    (optional) — key in the do-node output that holds []any of new items
+//	accumulate     (optional) — key name in the loop output for collected results (default "items")
+//	max_iterations (optional) — hard cap on total items processed, guarding against a
+//	               do-node that keeps discovering new work forever (default 1000)
+const defaultLoopMaxIterations = 1000
+
 func (r *runner) executeLoop(ctx context.Context, localName string, loopNode bundle.Node) (map[string]any, error) {
 	overPath, err := configString(loopNode.Config, "over")
 	if err != nil {
@@ -47,6 +51,15 @@ func (r *runner) executeLoop(ctx context.Context, localName string, loopNode bun
 	}
 	if accumulate == "" {
 		accumulate = "items"
+	}
+	maxIterations, hasMaxIterations, err := configInt(loopNode.Config, "max_iterations")
+	if err != nil {
+		return nil, fmt.Errorf("loop node: %w", err)
+	}
+	if !hasMaxIterations {
+		maxIterations = defaultLoopMaxIterations
+	} else if maxIterations <= 0 {
+		return nil, fmt.Errorf("loop node: config.max_iterations must be a positive integer, got %d", maxIterations)
 	}
 
 	raw, err := Resolve(r.execCtx, overPath)
@@ -72,8 +85,15 @@ func (r *runner) executeLoop(ctx context.Context, localName string, loopNode bun
 	r.midLoopCheckpoint = nil
 	defer func() { r.midLoopCheckpoint = prev }()
 
+	if len(queue) > maxIterations {
+		return nil, fmt.Errorf("loop node: initial queue length (%d) exceeds max_iterations (%d)", len(queue), maxIterations)
+	}
+
 	results := make([]any, 0, len(queue))
 	for idx := 0; idx < len(queue); idx++ {
+		if idx >= maxIterations {
+			return nil, fmt.Errorf("loop node: reached max_iterations (%d) with items still queued", maxIterations)
+		}
 		r.execCtx.SetIterVar(asName, queue[idx])
 		out, _, err := r.executeNode(ctx, doName)
 		r.execCtx.ClearIterVar(asName)

@@ -153,7 +153,7 @@ func ExecutePrompt(
 				})
 				continue
 			}
-			tool, _, _ := reg.Lookup(ref)
+			tool, sig, _ := reg.Lookup(ref)
 
 			var args map[string]any
 			_ = json.Unmarshal(tc.Input, &args)
@@ -166,7 +166,16 @@ func ExecutePrompt(
 				Attempt: iter + 1,
 			})
 			toolStart := time.Now()
-			output, toolErr := tool.Call(ctx, args)
+
+			callCtx := ctx
+			var cancel context.CancelFunc
+			if sig.TimeoutSeconds > 0 {
+				callCtx, cancel = context.WithTimeout(ctx, time.Duration(sig.TimeoutSeconds)*time.Second)
+			}
+			output, toolErr := tool.Call(callCtx, args)
+			if cancel != nil {
+				cancel()
+			}
 			toolDur := time.Since(toolStart).Milliseconds()
 
 			if toolErr != nil {
@@ -356,9 +365,13 @@ func buildCompletionRequest(
 	}
 	if raw, ok := node.Config["max_tokens"]; ok {
 		var mt int
-		if err := json.Unmarshal(raw, &mt); err == nil && mt > 0 {
-			req.MaxTokens = mt
+		if err := json.Unmarshal(raw, &mt); err != nil {
+			return req, fmt.Errorf("config.max_tokens must be an integer: %w", err)
 		}
+		if mt <= 0 {
+			return req, fmt.Errorf("config.max_tokens must be a positive integer, got %d", mt)
+		}
+		req.MaxTokens = mt
 	}
 
 	// --- System prompt ---
@@ -393,9 +406,10 @@ func buildCompletionRequest(
 	// --- Optional temperature ---
 	if raw, ok := node.Config["temperature"]; ok {
 		var temp float64
-		if err := json.Unmarshal(raw, &temp); err == nil {
-			req.Temperature = &temp
+		if err := json.Unmarshal(raw, &temp); err != nil {
+			return req, fmt.Errorf("config.temperature must be a number: %w", err)
 		}
+		req.Temperature = &temp
 	}
 
 	return req, nil
@@ -437,6 +451,16 @@ func buildMessages(
 	return []Message{{Role: "user", Blocks: blocks}}, nil
 }
 
+// fileValueBlock converts a FileValue to a ContentBlock, classifying it as an
+// "image" block when its MIME type is image/*, otherwise a "document" block.
+func fileValueBlock(fv FileValue) ContentBlock {
+	kind := "document"
+	if strings.HasPrefix(fv.MediaType, "image/") {
+		kind = "image"
+	}
+	return ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType}
+}
+
 // collectFileBlocks extracts FileValue, []FileValue, and ToolImageOutput inputs
 // and returns them as ContentBlocks. []FileValue comes from "file_path_array" bindings.
 func collectFileBlocks(inputs map[string]any) []ContentBlock {
@@ -444,26 +468,10 @@ func collectFileBlocks(inputs map[string]any) []ContentBlock {
 	for _, v := range inputs {
 		switch tv := v.(type) {
 		case FileValue:
-			kind := "document"
-			if strings.HasPrefix(tv.MediaType, "image/") {
-				kind = "image"
-			}
-			blocks = append(blocks, ContentBlock{
-				Type:      kind,
-				Data:      tv.Data,
-				MediaType: tv.MediaType,
-			})
+			blocks = append(blocks, fileValueBlock(tv))
 		case []FileValue:
 			for _, fv := range tv {
-				kind := "document"
-				if strings.HasPrefix(fv.MediaType, "image/") {
-					kind = "image"
-				}
-				blocks = append(blocks, ContentBlock{
-					Type:      kind,
-					Data:      fv.Data,
-					MediaType: fv.MediaType,
-				})
+				blocks = append(blocks, fileValueBlock(fv))
 			}
 		case ToolImageOutput:
 			blocks = append(blocks, ContentBlock{
@@ -608,11 +616,7 @@ func buildContentBlocks(items []contentItemConfig, inputs map[string]any) ([]Con
 			if !ok {
 				return nil, fmt.Errorf("content[%d] image: input %q must be a FileValue (use \"type\": \"file_path\" on the input binding), got %T", idx, item.Input, val)
 			}
-			kind := "document"
-			if strings.HasPrefix(fv.MediaType, "image/") {
-				kind = "image"
-			}
-			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+			blocks = append(blocks, fileValueBlock(fv))
 
 		case "image_sequence":
 			val, ok := inputs[item.Input]
@@ -649,11 +653,7 @@ func buildImageSequenceBlocks(cfg contentItemConfig, val any, globalInputs map[s
 				}
 				blocks = append(blocks, ContentBlock{Type: "text", Text: rendered})
 			}
-			kind := "document"
-			if strings.HasPrefix(fv.MediaType, "image/") {
-				kind = "image"
-			}
-			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+			blocks = append(blocks, fileValueBlock(fv))
 		}
 		return blocks, nil
 
@@ -685,11 +685,7 @@ func buildImageSequenceBlocks(cfg contentItemConfig, val any, globalInputs map[s
 			if err != nil {
 				return nil, fmt.Errorf("item[%d]: loading image: %w", i, err)
 			}
-			kind := "document"
-			if strings.HasPrefix(fv.MediaType, "image/") {
-				kind = "image"
-			}
-			blocks = append(blocks, ContentBlock{Type: kind, Data: fv.Data, MediaType: fv.MediaType})
+			blocks = append(blocks, fileValueBlock(fv))
 		}
 		return blocks, nil
 

@@ -240,6 +240,142 @@ func TestLoop_EmptyQueue(t *testing.T) {
 	}
 }
 
+// TestLoop_MaxIterationsCap_UnboundedGrowth verifies that a do-node which keeps
+// discovering new items forever is stopped once max_iterations is reached,
+// instead of hanging / growing the queue without bound.
+func TestLoop_MaxIterationsCap_UnboundedGrowth(t *testing.T) {
+	b := &bundle.Bundle{
+		Manifest: bundle.Manifest{Name: "loop_test", Entry: "main@v1"},
+		Nodes: map[string]map[string]bundle.Node{
+			"looper": {"v1": {Type: "loop", Config: map[string]json.RawMessage{
+				"over":           json.RawMessage(`"$.inputs.items"`),
+				"as":             json.RawMessage(`"item"`),
+				"do":             json.RawMessage(`"worker"`),
+				"append_from":    json.RawMessage(`"new_items"`),
+				"max_iterations": json.RawMessage(`5`),
+			}}},
+			"worker": {"v1": mustUnmarshalNode(t, `{
+				"type": "prompt",
+				"inputs": {"item": {"from": "$.item"}},
+				"config": {"model": "stub/stub", "user": "process {{ item }}"},
+				"output_schema": {
+					"type": "object",
+					"properties": {"result": {"type": "string"}, "new_items": {"type": "array", "items": {"type": "string"}}}
+				}
+			}`)},
+		},
+		Flows: map[string]map[string]bundle.Flow{},
+		Tools: map[string]map[string]bundle.ToolSignature{},
+	}
+	flow := bundle.Flow{
+		Entry: "looper",
+		Nodes: map[string]string{"looper": "looper@v1", "worker": "worker@v1"},
+	}
+
+	callCount := 0
+	// Every call discovers exactly one more item, so the queue would grow forever
+	// without a cap.
+	provider := &customLoopProvider{fn: func(_ CompletionRequest) (CompletionResponse, error) {
+		callCount++
+		return CompletionResponse{Content: `{"result":"ok","new_items":["more"]}`}, nil
+	}}
+
+	execCtx := NewExecutionContext(map[string]any{"items": []any{"a"}})
+	r := &runner{
+		b:        b,
+		flow:     flow,
+		execCtx:  execCtx,
+		provider: provider,
+		nextMap:  buildNextMap(flow),
+		tracer:   NewTracer(nil, nil),
+	}
+
+	_, err := r.executeLoop(context.Background(), "looper", b.Nodes["looper"]["v1"])
+	if err == nil {
+		t.Fatal("expected error when loop exceeds max_iterations, got nil")
+	}
+	if callCount > 5 {
+		t.Errorf("expected loop to stop at max_iterations (5), made %d calls", callCount)
+	}
+}
+
+// TestLoop_MaxIterationsCap_InitialQueueTooLarge rejects an initial queue that
+// already exceeds the cap before any iteration runs.
+func TestLoop_MaxIterationsCap_InitialQueueTooLarge(t *testing.T) {
+	b := &bundle.Bundle{
+		Manifest: bundle.Manifest{Name: "loop_test", Entry: "main@v1"},
+		Nodes: map[string]map[string]bundle.Node{
+			"looper": {"v1": {Type: "loop", Config: map[string]json.RawMessage{
+				"over":           json.RawMessage(`"$.inputs.items"`),
+				"as":             json.RawMessage(`"item"`),
+				"do":             json.RawMessage(`"worker"`),
+				"max_iterations": json.RawMessage(`2`),
+			}}},
+			"worker": {"v1": mustUnmarshalNode(t, `{
+				"type": "prompt",
+				"inputs": {"item": {"from": "$.item"}},
+				"config": {"model": "stub/stub", "user": "{{ item }}"},
+				"output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+			}`)},
+		},
+		Flows: map[string]map[string]bundle.Flow{},
+		Tools: map[string]map[string]bundle.ToolSignature{},
+	}
+	flow := bundle.Flow{
+		Entry: "looper",
+		Nodes: map[string]string{"looper": "looper@v1", "worker": "worker@v1"},
+	}
+
+	callCount := 0
+	execCtx := NewExecutionContext(map[string]any{"items": []any{"a", "b", "c"}})
+	r := &runner{
+		b:        b,
+		flow:     flow,
+		execCtx:  execCtx,
+		provider: &customLoopProvider{fn: func(_ CompletionRequest) (CompletionResponse, error) {
+			callCount++
+			return CompletionResponse{Content: `{"ok":true}`}, nil
+		}},
+		nextMap: buildNextMap(flow),
+		tracer:  NewTracer(nil, nil),
+	}
+
+	_, err := r.executeLoop(context.Background(), "looper", b.Nodes["looper"]["v1"])
+	if err == nil {
+		t.Fatal("expected error when initial queue exceeds max_iterations, got nil")
+	}
+	if callCount != 0 {
+		t.Errorf("expected 0 LLM calls when the initial queue is rejected upfront, got %d", callCount)
+	}
+}
+
+// TestLoop_MaxIterationsCap_InvalidConfig rejects a non-positive max_iterations.
+func TestLoop_MaxIterationsCap_InvalidConfig(t *testing.T) {
+	b, flow := makeLoopBundle(t, `{
+		"type": "prompt",
+		"inputs": {"item": {"from": "$.item"}},
+		"config": {"model": "stub/stub", "user": "{{ item }}"},
+		"output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+	}`)
+	loopNode := b.Nodes["looper"]["v1"]
+	loopNode.Config["max_iterations"] = json.RawMessage(`0`)
+
+	execCtx := NewExecutionContext(map[string]any{"items": []any{"a"}})
+	r := &runner{
+		b:        b,
+		flow:     flow,
+		execCtx:  execCtx,
+		provider: &stubLoopProvider{response: `{"ok":true}`},
+		nextMap:  buildNextMap(flow),
+		tracer:   NewTracer(nil, nil),
+	}
+
+	_, err := r.executeLoop(context.Background(), "looper", loopNode)
+	if err == nil {
+		t.Fatal("expected error for max_iterations=0, got nil")
+	}
+}
+
 // customLoopProvider lets tests inject per-call logic.
 type customLoopProvider struct {
 	fn func(CompletionRequest) (CompletionResponse, error)

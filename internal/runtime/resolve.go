@@ -57,7 +57,7 @@ func Resolve(ctx *ExecutionContext, path string) (any, error) {
 		}
 
 		// $.<node>.output[.<path>...]
-		if len(parts) < 2 || parts[1] != "output" {
+		if parts[1] != "output" {
 			return nil, fmt.Errorf("path %q: node reference must be $.<node>.output[.<path>]", path)
 		}
 		output, ok := ctx.NodeOutput(root)

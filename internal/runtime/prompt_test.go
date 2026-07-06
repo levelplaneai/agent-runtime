@@ -1,11 +1,15 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/levelplaneai/agent-runtime/internal/bundle"
 )
 
 func TestResolveText_Inline(t *testing.T) {
@@ -535,6 +539,116 @@ func TestBuildCompletionRequest_MaxTokens_Custom(t *testing.T) {
 	}
 	if req.MaxTokens != 65536 {
 		t.Errorf("expected max_tokens=65536, got %d", req.MaxTokens)
+	}
+}
+
+// --- Gap 5: tool timeout inside the agentic prompt loop ---
+
+// sequencedProvider returns one CompletionResponse per call, in order.
+type sequencedProvider struct {
+	responses []CompletionResponse
+	call      int
+}
+
+func (s *sequencedProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResponse, error) {
+	resp := s.responses[s.call]
+	s.call++
+	return resp, nil
+}
+
+// TestExecutePrompt_AgenticLoop_ToolTimeoutEnforced verifies that a registry
+// tool's TimeoutSeconds is applied inside the agentic tool-use loop, not just
+// for standalone tool_call nodes.
+func TestExecutePrompt_AgenticLoop_ToolTimeoutEnforced(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("do the thing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewRegistry()
+	deadlineTool := ToolFunc(func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+		_, hasDeadline := ctx.Deadline()
+		return map[string]any{"has_deadline": hasDeadline}, nil
+	})
+	if err := reg.Register("deadline_check@v1", bundle.ToolSignature{TimeoutSeconds: 30}, deadlineTool); err != nil {
+		t.Fatal(err)
+	}
+
+	node := makeNode(t, `{
+		"type": "prompt",
+		"inputs": {},
+		"config": {
+			"model": "stub/stub",
+			"tools": ["deadline_check@v1"]
+		}
+	}`)
+
+	provider := &sequencedProvider{responses: []CompletionResponse{
+		{
+			ToolCalls:  []ToolCall{{ID: "call_1", Name: sanitizeToolName("deadline_check@v1"), Input: json.RawMessage(`{}`)}},
+			StopReason: "tool_use",
+		},
+		{Content: `{"done":true}`, StopReason: "end_turn"},
+	}}
+
+	var traceBuf bytes.Buffer
+	ctx := ContextWithTracer(context.Background(), NewTracer(&traceBuf, nil))
+
+	execCtx := NewExecutionContext(map[string]any{})
+	out, err := ExecutePrompt(ctx, node, dir, execCtx, provider, reg, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out["done"] != true {
+		t.Errorf("unexpected output: %v", out)
+	}
+	if !strings.Contains(traceBuf.String(), `"has_deadline":true`) {
+		t.Errorf("expected tool to observe a context deadline from TimeoutSeconds; trace: %s", traceBuf.String())
+	}
+}
+
+func TestBuildCompletionRequest_MaxTokens_MalformedType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node := makeNode(t, `{
+		"type": "prompt", "inputs": {},
+		"config": {"model": "anthropic/claude-haiku-4-5", "max_tokens": "5000"}
+	}`)
+	_, err := buildCompletionRequest(node, dir, map[string]any{}, "anthropic/claude-haiku-4-5")
+	if err == nil {
+		t.Fatal("expected error for string max_tokens, got nil")
+	}
+}
+
+func TestBuildCompletionRequest_MaxTokens_Negative(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node := makeNode(t, `{
+		"type": "prompt", "inputs": {},
+		"config": {"model": "anthropic/claude-haiku-4-5", "max_tokens": -1}
+	}`)
+	_, err := buildCompletionRequest(node, dir, map[string]any{}, "anthropic/claude-haiku-4-5")
+	if err == nil {
+		t.Fatal("expected error for negative max_tokens, got nil")
+	}
+}
+
+func TestBuildCompletionRequest_Temperature_MalformedType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	node := makeNode(t, `{
+		"type": "prompt", "inputs": {},
+		"config": {"model": "anthropic/claude-haiku-4-5", "temperature": "hot"}
+	}`)
+	_, err := buildCompletionRequest(node, dir, map[string]any{}, "anthropic/claude-haiku-4-5")
+	if err == nil {
+		t.Fatal("expected error for non-numeric temperature, got nil")
 	}
 }
 
