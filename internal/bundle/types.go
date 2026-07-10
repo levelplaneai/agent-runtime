@@ -15,8 +15,13 @@ type FlowInputField struct {
 	Type string `json:"type"`
 }
 
+// FlowOutputBinding binds a flow output to a value. Exactly one of From or
+// FromAny must be set. FromAny evaluates paths in order and the first that
+// resolves non-null wins (all-null yields null); it is only valid for flow
+// outputs, not node inputs (which use InputBinding).
 type FlowOutputBinding struct {
-	From string `json:"from"`
+	From    string   `json:"from,omitempty"`
+	FromAny []string `json:"from_any,omitempty"`
 }
 
 type Edge struct {

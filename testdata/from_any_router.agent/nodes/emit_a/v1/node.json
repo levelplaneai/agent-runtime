@@ -1,0 +1,14 @@
+{
+  "type": "tool_call",
+  "description": "Terminal A — emits a value only reached when route == 'a'",
+  "config": {
+    "tool": "emit.a@v1",
+    "args": {}
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" }
+    }
+  }
+}

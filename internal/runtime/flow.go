@@ -520,9 +520,30 @@ func sortNodes(nodes []string, entry string) {
 
 // resolveFlowOutputs evaluates each flow output binding against the execution
 // context and returns the resolved key→value map.
+//
+// A binding uses either `from` (a single path) or `from_any` (a list of paths
+// evaluated in order, where the first non-nil value wins; all-nil yields nil).
+// For `from_any`, only a nil *value* moves on to the next candidate — a genuine
+// Resolve error (malformed path, bad traversal into an executed node's output)
+// still aborts the flow.
 func resolveFlowOutputs(flow bundle.Flow, execCtx *ExecutionContext) (map[string]any, error) {
 	result := make(map[string]any, len(flow.Outputs))
 	for name, binding := range flow.Outputs {
+		if binding.FromAny != nil {
+			var chosen any
+			for _, from := range binding.FromAny {
+				val, err := Resolve(execCtx, from)
+				if err != nil {
+					return nil, fmt.Errorf("flow output %q: %w", name, err)
+				}
+				if val != nil {
+					chosen = val
+					break
+				}
+			}
+			result[name] = chosen
+			continue
+		}
 		val, err := Resolve(execCtx, binding.From)
 		if err != nil {
 			return nil, fmt.Errorf("flow output %q: %w", name, err)

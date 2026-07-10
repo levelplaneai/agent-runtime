@@ -1,0 +1,11 @@
+{
+  "bundle_version": "1.0.0",
+  "runtime_version": "0.1",
+  "name": "from_any_router",
+  "description": "Deterministic router with two mutually-exclusive terminals coalesced via from_any",
+  "entry": "main@v1",
+  "tools_required": [
+    "emit.a@v1",
+    "emit.b@v1"
+  ]
+}

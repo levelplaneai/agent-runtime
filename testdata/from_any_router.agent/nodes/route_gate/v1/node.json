@@ -1,0 +1,14 @@
+{
+  "type": "router",
+  "description": "Deterministic route on the 'route' input: 'a' → emit_a, anything else → emit_b",
+  "inputs": {
+    "route": { "from": "$.inputs.route" }
+  },
+  "config": {
+    "branches": [
+      { "when": { "field": "route", "op": "eq", "value": "a" }, "goto": "emit_a" },
+      { "default": true, "goto": "emit_b" }
+    ]
+  },
+  "on_error": "fail"
+}
