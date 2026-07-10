@@ -84,10 +84,31 @@ func validateFlow(b *Bundle, flowName, version string, flow Flow) []error {
 		}
 	}
 
-	// Rule 5: from paths in flow outputs reference nodes that exist
+	// Rule 5: flow output bindings are well-formed and reference nodes that exist.
+	// Exactly one of `from` / `from_any` must be set; each path is validated like
+	// a plain `from` value. `from_any` coalesces (first non-null wins at runtime).
 	for outputName, binding := range flow.Outputs {
-		if err := validateFromPath(binding.From, flow.Nodes, loc+"/outputs/"+outputName); err != nil {
-			errs = append(errs, err)
+		outLoc := loc + "/outputs/" + outputName
+		hasFrom := binding.From != ""
+		hasFromAny := binding.FromAny != nil
+		switch {
+		case hasFrom && hasFromAny:
+			errs = append(errs, fmt.Errorf("%s: exactly one of from / from_any must be set, not both", outLoc))
+		case !hasFrom && !hasFromAny:
+			errs = append(errs, fmt.Errorf("%s: from or from_any is required", outLoc))
+		case hasFromAny:
+			if len(binding.FromAny) == 0 {
+				errs = append(errs, fmt.Errorf("%s: from_any must be a non-empty array", outLoc))
+			}
+			for i, from := range binding.FromAny {
+				if err := validateFromPath(from, flow.Nodes, fmt.Sprintf("%s/from_any[%d]", outLoc, i)); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		default: // hasFrom
+			if err := validateFromPath(binding.From, flow.Nodes, outLoc); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 

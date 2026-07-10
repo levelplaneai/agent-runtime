@@ -80,6 +80,28 @@ Rules: directory name = identity, no `id` fields anywhere. Every reference uses 
 | `edges` | yes | sequential transitions; can be `[]` for single-node flows |
 | `inputs` / `outputs` | yes | omitting `outputs` silently returns `{}`; omitting `inputs` leaves the contract undeclared |
 
+Each `outputs` entry binds one output key. Use exactly one of:
+
+| Key | Value | Meaning |
+|-----|-------|---------|
+| `from` | a single `$.` path | bind the output to that path's resolved value |
+| `from_any` | a non-empty array of `$.` paths | **coalescing** — evaluate paths in order; first non-null wins; all-null yields `null` |
+
+### `from_any` — coalescing output binding
+
+```json
+"outputs": {
+  "should_cost": { "from_any": [
+    "$.robotic_mig_shouldcost.output",
+    "$.robotic_spot_shouldcost.output",
+    "$.robotic_proj_shouldcost.output",
+    "$.manual_mig_shouldcost.output"
+  ]}
+}
+```
+
+Paths are evaluated **in order**; the **first non-null wins; all-null yields null** (not an error). This is meant for router-branched flows with several mutually-exclusive terminal nodes: `$.<node>.output` resolves to `null` for a node that didn't run, so `from_any` collapses the per-branch outputs into one uniform key instead of a mostly-null map. A genuine resolution error (malformed path, or a bad traversal into a node that *did* execute) still aborts the flow — only a null *value* moves on to the next candidate. `from_any` is valid only for flow outputs, not node inputs. Exactly one of `from` / `from_any` must be set on each output.
+
 ---
 
 ## Node envelope (all types)
@@ -371,7 +393,7 @@ The target flow's `inputs`/`outputs` define the contract.
 | `$.<as_name>.<field>` | field of an iteration variable (e.g. `$.region.path`) |
 | `$.decision` | LLM router's chosen branch (inside router only) |
 
-Used in: `inputs[*].from`, `outputs[*].from`, `router.branches[*].when`, `map.config.over`, `loop.config.over`.
+Used in: `inputs[*].from`, `outputs[*].from`, `outputs[*].from_any[*]`, `router.branches[*].when`, `map.config.over`, `loop.config.over`.
 
 Avoid naming a `map`/`loop` `as` value `inputs` — `$.inputs.<field>` is always resolved as a flow input first, so a nested path into an iteration variable named `inputs` is unreachable (only the bare `$.inputs`, with no further path, would resolve to the current item).
 
@@ -427,6 +449,7 @@ Before running, the runtime checks:
 - [ ] Every node in `edges`, `goto`, `do`, `parallel.branches` exists in the flow's `nodes` map
 - [ ] Every `{{ name }}` in a prompt matches a declared `inputs` key
 - [ ] Every `from` path resolves to a node that runs before the consumer
+- [ ] Each flow output sets exactly one of `from` / `from_any`; `from_any` is a non-empty array of valid paths
 - [ ] `entry` node exists in the flow's `nodes` map
 - [ ] `manifest.entry` references a valid flow version
 - [ ] Every tool in `tool_call.config.tool` and `prompt.config.tools` is in `manifest.tools_required`

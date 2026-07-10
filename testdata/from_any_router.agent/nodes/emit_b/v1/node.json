@@ -1,0 +1,14 @@
+{
+  "type": "tool_call",
+  "description": "Terminal B — emits a value on the default route",
+  "config": {
+    "tool": "emit.b@v1",
+    "args": {}
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" }
+    }
+  }
+}

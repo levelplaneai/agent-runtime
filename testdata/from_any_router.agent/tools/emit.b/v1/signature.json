@@ -1,0 +1,14 @@
+{
+  "description": "Emit the terminal B value",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" }
+    },
+    "required": ["value"]
+  }
+}

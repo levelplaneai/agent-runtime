@@ -1,0 +1,17 @@
+{
+  "description": "Route to one of two terminal nodes; coalesce their outputs with from_any (first non-null wins)",
+  "inputs": {
+    "route": { "type": "string" }
+  },
+  "outputs": {
+    "should_cost": { "from_any": ["$.emit_a.output.value", "$.emit_b.output.value"] },
+    "route_echo": { "from": "$.inputs.route" }
+  },
+  "entry": "route_gate",
+  "nodes": {
+    "route_gate": "route_gate@v1",
+    "emit_a": "emit_a@v1",
+    "emit_b": "emit_b@v1"
+  },
+  "edges": []
+}

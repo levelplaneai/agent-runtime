@@ -126,7 +126,7 @@ Inside a node's version directory, references to local files (prompt.md, example
 
 Key fields:
 
-- **`inputs` / `outputs`** — declare the flow's contract. Makes it composable as a subflow.
+- **`inputs` / `outputs`** — declare the flow's contract. Makes it composable as a subflow. Each output entry sets exactly one of `from` (a single `$.` path) or `from_any` (a non-empty array of `$.` paths, coalescing: evaluated in order, first non-null wins, all-null yields `null`). `from_any` is for router-branched flows with mutually-exclusive terminals — it collapses per-branch outputs into one uniform key. Flow outputs only, not node inputs.
 - **`entry`** — local name of the first node to execute.
 - **`nodes`** — map from local name → versioned node reference. The local name is used in edges, `goto`, `do`, and `parallel.branches`. This binding layer lets a flow use multiple versions of the same node under different local names if needed.
 - **`edges`** — sequential transitions between nodes. Only place top-level sequencing lives. Routers don't appear here; they own their routing via `goto`.
