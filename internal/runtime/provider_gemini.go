@@ -110,6 +110,13 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 			cand.FinishReason, finishMsg(cand.FinishMessage))
 	}
 
+	var inputTokens, outputTokens int64
+	if um := resp.UsageMetadata; um != nil {
+		inputTokens = int64(um.PromptTokenCount)
+		// Thinking tokens are billed as output; CandidatesTokenCount excludes them.
+		outputTokens = int64(um.CandidatesTokenCount) + int64(um.ThoughtsTokenCount)
+	}
+
 	var textContent string
 	var toolCalls []ToolCall
 	var builtinToolsUsed []string
@@ -144,6 +151,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 			ToolCalls:        toolCalls,
 			StopReason:       "tool_use",
 			BuiltinToolsUsed: builtinToolsUsed,
+			InputTokens:      inputTokens,
+			OutputTokens:     outputTokens,
 		}, nil
 	}
 
@@ -151,9 +160,14 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		return CompletionResponse{}, fmt.Errorf("gemini: no text or function calls in response (finish_reason: %s%s)",
 			cand.FinishReason, finishMsg(cand.FinishMessage))
 	}
-	return CompletionResponse{Content: textContent, StopReason: "end_turn", BuiltinToolsUsed: builtinToolsUsed}, nil
+	return CompletionResponse{
+		Content:          textContent,
+		StopReason:       "end_turn",
+		BuiltinToolsUsed: builtinToolsUsed,
+		InputTokens:      inputTokens,
+		OutputTokens:     outputTokens,
+	}, nil
 }
-
 
 func buildGeminiContents(messages []Message) ([]*genai.Content, error) {
 	contents := make([]*genai.Content, 0, len(messages))
