@@ -76,6 +76,7 @@ func ExecuteToolCall(ctx context.Context, node bundle.Node, execCtx *ExecutionCo
 		Event:      "tool_done",
 		Node:       execCtx.CurrentNode(),
 		Tool:       toolRef,
+		Output:     sanitizeOutputForTrace(output),
 		DurationMS: time.Since(toolStart).Milliseconds(),
 	})
 	return output, nil
