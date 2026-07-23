@@ -78,7 +78,7 @@ func RunFlow(
 		Event:  "flow_start",
 		Bundle: b.Manifest.Name,
 		Flow:   b.Manifest.Entry,
-		Inputs: inputs,
+		Inputs: sanitizeInputMapForTrace(inputs),
 		RunID:  runID,
 	})
 
@@ -188,7 +188,7 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 
 	r.execCtx.SetCurrentNode(localName)
 	nodeStart := time.Now()
-	r.tracer.Emit(TraceEvent{Event: "node_start", Node: localName, NodeType: node.Type, RunID: r.runID})
+	r.tracer.Emit(TraceEvent{Event: "node_start", Node: localName, NodeType: node.Type, Inputs: traceNodeInputs(node, r.execCtx), RunID: r.runID})
 
 	output, err := ApplyErrorPolicy(ctx, localName, node, func() (map[string]any, error) {
 		switch node.Type {
@@ -245,6 +245,74 @@ func (r *runner) executeNode(ctx context.Context, localName string) (map[string]
 	r.execCtx.SetNodeOutput(localName, output)
 
 	return output, gotoTarget, nil
+}
+
+// traceNodeInputs resolves a node's declared input bindings for the node_start
+// trace event. It is deliberately NOT resolveNodeInputs: it never loads file
+// bytes (a file_path binding becomes a compact {type:"file", path} marker, and a
+// file_path_array becomes {type:"file_array", paths}), so emitting inputs at every
+// node can't re-read multi-MB drawings or balloon the trace with base64. It is
+// also best-effort — an unresolvable binding is skipped, never surfaced as an
+// error — because a trace must never break execution. Returns nil for nodes with
+// no declared inputs (loop/map/parallel drive off config), so the omitempty tag
+// keeps node_start unchanged for them.
+func traceNodeInputs(node bundle.Node, execCtx *ExecutionContext) map[string]any {
+	if len(node.Inputs) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(node.Inputs))
+	for name, binding := range node.Inputs {
+		val, err := Resolve(execCtx, binding.From)
+		if err != nil {
+			continue // best-effort: trace resolution must never fail a run
+		}
+		switch binding.Type {
+		case "file_path":
+			out[name] = map[string]any{"type": "file", "path": val}
+		case "file_path_array":
+			out[name] = map[string]any{"type": "file_array", "paths": val}
+		default:
+			out[name] = sanitizeTraceValue(val)
+		}
+	}
+	return out
+}
+
+// sanitizeTraceValue strips raw bytes from a resolved input value, replacing any
+// FileValue / ToolImageOutput (or a slice of FileValues) with a size-only marker.
+// Mirrors sanitizeOutputForTrace on the output side. Non-file values pass through
+// unchanged — large plain JSON blobs (e.g. prior_run) are the caller's concern
+// (worker size-cap / prior_run trimming), not this function's.
+func sanitizeTraceValue(v any) any {
+	switch t := v.(type) {
+	case FileValue:
+		return map[string]any{"type": "file", "name": t.Name, "mediaType": t.MediaType, "size": len(t.Data)}
+	case ToolImageOutput:
+		return map[string]any{"type": "image", "mediaType": t.MediaType, "size": len(t.Data)}
+	case []FileValue:
+		out := make([]any, len(t))
+		for i, fv := range t {
+			out[i] = map[string]any{"type": "file", "name": fv.Name, "mediaType": fv.MediaType, "size": len(fv.Data)}
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// sanitizeInputMapForTrace returns a byte-free copy of a flow-input map for the
+// flow_start trace event, so a multi-MB drawing rides through as a size marker
+// instead of base64 (the path is already carried separately as "<name>_path").
+// The original map is left untouched — execution and resume snapshots use it as-is.
+func sanitizeInputMapForTrace(inputs map[string]any) map[string]any {
+	if len(inputs) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(inputs))
+	for k, v := range inputs {
+		out[k] = sanitizeTraceValue(v)
+	}
+	return out
 }
 
 // runFrontier drives the frontier-based execution loop for r.flow.
@@ -386,7 +454,7 @@ func RunFlowResume(
 		Event:  "flow_start",
 		Bundle: b.Manifest.Name,
 		Flow:   b.Manifest.Entry,
-		Inputs: inputs,
+		Inputs: sanitizeInputMapForTrace(inputs),
 		RunID:  runID,
 	})
 
