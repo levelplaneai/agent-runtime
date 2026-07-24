@@ -89,6 +89,12 @@ func resolveNodeInputs(node bundle.Node, execCtx *ExecutionContext) (map[string]
 	for name, binding := range node.Inputs {
 		val, err := Resolve(execCtx, binding.From)
 		if err != nil {
+			// An optional binding degrades an unresolvable path to null rather than
+			// failing the node (e.g. $.inputs.prior_run.<node> on a first run).
+			if binding.Optional {
+				resolved[name] = nil
+				continue
+			}
 			return nil, fmt.Errorf("resolving input %q: %w", name, err)
 		}
 		switch binding.Type {
