@@ -41,6 +41,11 @@ type Flow struct {
 type InputBinding struct {
 	From string `json:"from"`
 	Type string `json:"type,omitempty"` // "file_path" → runtime reads file into FileValue
+	// Optional: when the "from" path can't be resolved (missing key / null parent),
+	// yield null instead of failing the node. Mirrors the null semantics that
+	// $.<node>.output refs already have for unexecuted nodes; lets a node bind into
+	// an object that may be absent (e.g. an optional prior_run slice on a first run).
+	Optional bool `json:"optional,omitempty"`
 }
 
 type Node struct {
