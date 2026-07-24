@@ -249,7 +249,7 @@ func buildAssistantTurnMessage(resp CompletionResponse) Message {
 // knownBuiltinTools lists provider-managed tool names accepted in config.tools.
 // The key is the full "provider:name" string.
 var knownBuiltinTools = map[string]bool{
-	"anthropic:web_search":    true,
+	"anthropic:web_search":     true,
 	"anthropic:code_execution": true,
 	"anthropic:bash":           true,
 	"anthropic:text_editor":    true,
@@ -408,9 +408,20 @@ func buildCompletionRequest(
 	// with empty/zero values that satisfy the schema. Instead, append the schema
 	// to the system prompt so the model knows the expected format, and use a
 	// separate Haiku call after the final response to reliably extract JSON.
+	//
+	// The instruction is explicit that the model must emit an *instance* that
+	// conforms to the schema, not the schema document. Without this, models
+	// (weaker ones especially) tend to echo the schema's own shape and wrap the
+	// answer in a "properties" key — e.g. {"properties": {a, b}} instead of {a, b}.
 	if len(node.OutputSchema) > 0 {
 		schemaBytes, _ := json.Marshal(node.OutputSchema)
-		req.System += "\n\n---\nOutput schema (JSON):\n" + string(schemaBytes)
+		req.System += "\n\n---\n" +
+			"Your final answer must be a single JSON object that CONFORMS TO the schema " +
+			"below — the concrete data values, not the schema itself. Do NOT output the " +
+			"schema. Do NOT wrap your answer in a \"properties\" key, and do NOT include " +
+			"\"type\"/\"required\"/\"properties\" meta keys. Return only the fields the " +
+			"schema describes.\n" +
+			"JSON schema:\n" + string(schemaBytes)
 	}
 
 	// --- Optional temperature ---
@@ -800,9 +811,59 @@ func extractOrHaiku(ctx context.Context, resp CompletionResponse, schema map[str
 	}
 	// If the model already returned valid JSON, skip the Haiku call.
 	if out, ok := parseJSONFlexible(resp.Content); ok {
-		return out, nil
+		return unwrapSchemaEcho(out, schema), nil
 	}
-	return extractWithHaiku(ctx, resp.Content, schema)
+	out, err := extractWithHaiku(ctx, resp.Content, schema)
+	if err != nil {
+		return nil, err
+	}
+	return unwrapSchemaEcho(out, schema), nil
+}
+
+// unwrapSchemaEcho corrects the common failure mode where a model, handed a JSON
+// schema, echoes the schema's own envelope instead of producing an instance —
+// returning {"properties": {a, b}} (optionally alongside "type"/"required") rather
+// than {a, b}. When the output is that schema-shaped wrapper and the schema does not
+// legitimately declare a field named "properties", the inner object is returned.
+//
+// It is deliberately conservative: it unwraps only when every top-level key of the
+// output belongs to the JSON Schema envelope, so a genuine instance that happens to
+// carry a "properties" field alongside real data is left untouched.
+func unwrapSchemaEcho(out map[string]any, schema map[string]json.RawMessage) map[string]any {
+	if out == nil {
+		return out
+	}
+	// Only object schemas that declare a "properties" block can be echoed this way.
+	rawProps, ok := schema["properties"]
+	if !ok {
+		return out
+	}
+	// If the schema itself declares a field literally named "properties", then a
+	// top-level "properties" key is legitimate instance data — never unwrap.
+	var declared map[string]json.RawMessage
+	if err := json.Unmarshal(rawProps, &declared); err != nil {
+		return out
+	}
+	if _, isField := declared["properties"]; isField {
+		return out
+	}
+	inner, ok := out["properties"].(map[string]any)
+	if !ok {
+		return out
+	}
+	// Every sibling key must be part of the JSON Schema envelope; any real data key
+	// means this is not a pure schema echo and must be left alone.
+	envelope := map[string]bool{
+		"properties": true, "type": true, "required": true,
+		"$schema": true, "$defs": true, "definitions": true,
+		"additionalProperties": true, "description": true, "title": true,
+	}
+	for k := range out {
+		if !envelope[k] {
+			return out
+		}
+	}
+	return inner
 }
 
 // parseJSONFlexible tries to parse text as a JSON object, handling common
@@ -846,11 +907,17 @@ func extractWithHaiku(ctx context.Context, rawContent string, schema map[string]
 		Model:     anthropic.ModelClaudeHaiku4_5_20251001,
 		MaxTokens: 8192,
 		System: []anthropic.TextBlockParam{{
-			Text: "You are a JSON extraction assistant. Given a raw text response and a JSON schema, extract the structured data and return ONLY valid JSON matching the schema. No explanation, no markdown, no code fences.",
+			Text: "You are a JSON extraction assistant. You are given a raw text response and a " +
+				"JSON schema that describes the desired output. Return ONLY a single JSON object " +
+				"that is an INSTANCE conforming to the schema — the concrete data values. Do NOT " +
+				"return the schema itself, do NOT wrap the result in a \"properties\" key, and do " +
+				"NOT include \"type\"/\"required\"/\"properties\" meta keys. No explanation, no " +
+				"markdown, no code fences.",
 		}},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(
-				"Schema:\n" + string(schemaBytes) + "\n\nText to extract from:\n" + rawContent,
+				"JSON schema describing the desired output:\n" + string(schemaBytes) +
+					"\n\nText to extract the data from:\n" + rawContent,
 			)),
 		},
 	})

@@ -155,9 +155,16 @@ func TestBuildCompletionRequest_SystemAndUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	wantSystem := "You are a test assistant.\n\n---\nOutput schema (JSON):\n{\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"],\"type\":\"object\"}"
-	if req.System != wantSystem {
-		t.Errorf("unexpected system: %q", req.System)
+	schemaJSON := "{\"properties\":{\"result\":{\"type\":\"string\"}},\"required\":[\"result\"],\"type\":\"object\"}"
+	if !strings.Contains(req.System, "You are a test assistant.") {
+		t.Errorf("system prompt lost the base system text: %q", req.System)
+	}
+	if !strings.Contains(req.System, "JSON schema:\n"+schemaJSON) {
+		t.Errorf("system prompt missing appended schema: %q", req.System)
+	}
+	// The instruction must steer the model toward an instance, not the schema shape.
+	if !strings.Contains(req.System, "properties") || !strings.Contains(req.System, "CONFORMS TO") {
+		t.Errorf("system prompt missing anti-schema-echo instruction: %q", req.System)
 	}
 	if len(req.Messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(req.Messages))
@@ -668,5 +675,118 @@ func TestCollectFileBlocks_ToolImageOutput(t *testing.T) {
 	}
 	if blocks[0].MediaType != "image/jpeg" {
 		t.Errorf("expected image/jpeg, got %q", blocks[0].MediaType)
+	}
+}
+
+// --- Schema-echo wrapping (the {"properties": {a, b}} bug) ---------------------
+//
+// Regression coverage for the runtime bug where prompt nodes returned the answer
+// wrapped in a "properties" key (mirroring the JSON schema's own envelope) instead
+// of a bare instance. Fixes: (1) the system/Haiku prompts instruct the model to
+// emit an instance, and (2) unwrapSchemaEcho corrects the wrapper if it slips through.
+
+// abSchema is an object schema declaring two data fields, a and b — the shape a
+// node author writes when they "ask for a and b".
+func abSchema() map[string]json.RawMessage {
+	return map[string]json.RawMessage{
+		"type":       json.RawMessage(`"object"`),
+		"properties": json.RawMessage(`{"a":{"type":"string"},"b":{"type":"string"}}`),
+		"required":   json.RawMessage(`["a","b"]`),
+	}
+}
+
+func TestUnwrapSchemaEcho_PropertiesOnlyWrapper(t *testing.T) {
+	// The exact bug: {"properties": {a, b}} -> {a, b}.
+	out := map[string]any{"properties": map[string]any{"a": "x", "b": "y"}}
+	got := unwrapSchemaEcho(out, abSchema())
+	if got["a"] != "x" || got["b"] != "y" {
+		t.Fatalf("expected unwrapped {a,b}, got %v", got)
+	}
+	if _, still := got["properties"]; still {
+		t.Errorf("properties wrapper was not removed: %v", got)
+	}
+}
+
+func TestUnwrapSchemaEcho_FullSchemaEcho(t *testing.T) {
+	// Model echoed the whole schema envelope, not just "properties".
+	out := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"a": "x", "b": "y"},
+		"required":   []any{"a", "b"},
+	}
+	got := unwrapSchemaEcho(out, abSchema())
+	if got["a"] != "x" || got["b"] != "y" || len(got) != 2 {
+		t.Fatalf("expected unwrapped {a,b}, got %v", got)
+	}
+}
+
+func TestUnwrapSchemaEcho_LeavesGenuineInstanceAlone(t *testing.T) {
+	// A correct instance must pass through untouched.
+	out := map[string]any{"a": "x", "b": "y"}
+	got := unwrapSchemaEcho(out, abSchema())
+	if got["a"] != "x" || got["b"] != "y" || len(got) != 2 {
+		t.Fatalf("genuine instance was altered: %v", got)
+	}
+}
+
+func TestUnwrapSchemaEcho_PropertiesAlongsideRealData(t *testing.T) {
+	// "properties" sitting next to a real data key is NOT a pure echo — don't unwrap.
+	out := map[string]any{"properties": map[string]any{"a": "x"}, "b": "y"}
+	got := unwrapSchemaEcho(out, abSchema())
+	if _, ok := got["properties"]; !ok {
+		t.Fatalf("must not unwrap when real data sits beside properties: %v", got)
+	}
+}
+
+func TestUnwrapSchemaEcho_SchemaDeclaresPropertiesField(t *testing.T) {
+	// If the schema legitimately declares a field named "properties", a top-level
+	// "properties" object is real instance data and must be preserved.
+	schema := map[string]json.RawMessage{
+		"type":       json.RawMessage(`"object"`),
+		"properties": json.RawMessage(`{"properties":{"type":"object"}}`),
+		"required":   json.RawMessage(`["properties"]`),
+	}
+	out := map[string]any{"properties": map[string]any{"nested": "value"}}
+	got := unwrapSchemaEcho(out, schema)
+	inner, ok := got["properties"].(map[string]any)
+	if !ok || inner["nested"] != "value" {
+		t.Fatalf("legitimate 'properties' field was clobbered: %v", got)
+	}
+}
+
+// TestExecutePrompt_SchemaEcho_Unwrapped is the end-to-end reproduction: a prompt
+// node whose main model returns the schema-echo wrapper. Before the fix ExecutePrompt
+// returned {"properties": {...}}; now it returns the bare instance.
+func TestExecutePrompt_SchemaEcho_Unwrapped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user.prompt"), []byte("give me a and b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	node := makeNode(t, `{
+		"type": "prompt",
+		"description": "test",
+		"inputs": {},
+		"config": {"model": "anthropic/claude-haiku-4-5"},
+		"output_schema": {
+			"type": "object",
+			"properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+			"required": ["a", "b"]
+		}
+	}`)
+
+	// Main model echoes the schema shape — valid JSON, so the Haiku fallback is skipped.
+	provider := &stubProvider{response: CompletionResponse{Content: `{"properties":{"a":"x","b":"y"}}`}}
+	execCtx := NewExecutionContext(map[string]any{})
+
+	out, err := ExecutePrompt(context.Background(), node, dir, execCtx, provider, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out["a"] != "x" || out["b"] != "y" {
+		t.Fatalf("expected {a:x, b:y}, got %v", out)
+	}
+	if _, wrapped := out["properties"]; wrapped {
+		t.Errorf("output is still wrapped in a properties key: %v", out)
 	}
 }
