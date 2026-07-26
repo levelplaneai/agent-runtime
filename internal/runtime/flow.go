@@ -72,6 +72,11 @@ func RunFlow(
 		runID = generateRunID()
 	}
 
+	// Restore CLI-stringified inputs (object/array/number/bool) to their declared types before
+	// they enter the context — otherwise a nested binding like $.inputs.prior_run.<node> can't
+	// index into what arrived as a JSON string. See coerceDeclaredInputs.
+	inputs = coerceDeclaredInputs(inputs, flow.Inputs)
+
 	t := tracerFrom(ctx)
 	flowStart := time.Now()
 	t.Emit(TraceEvent{
@@ -435,7 +440,7 @@ func RunFlowResume(
 		return nil, fmt.Errorf("flow %q version %q not found in bundle", flowName, flowVersion)
 	}
 
-	inputs := unmarshalAnyMap(snap.Inputs)
+	inputs := coerceDeclaredInputs(unmarshalAnyMap(snap.Inputs), flow.Inputs)
 	nodeOutputs := unmarshalAnyMap(snap.NodeOutputs)
 
 	execCtx := NewExecutionContext(inputs)
