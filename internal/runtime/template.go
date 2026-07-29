@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
+	"strconv"
 )
 
 var templatePlaceholder = regexp.MustCompile(`\{\{\s*(\w+)\s*\}\}`)
@@ -49,7 +49,12 @@ func valueToString(v any) (string, error) {
 	case json.Number:
 		return t.String(), nil
 	case float64:
-		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%g", t), "0"), "."), nil
+		// strconv 'f'/-1 renders the shortest exact decimal with no exponent and
+		// no trailing zeros: 1000 -> "1000", 1.5 -> "1.5", 0.1 -> "0.1".
+		// The previous TrimRight(Sprintf("%g")) stripped the trailing zeros of
+		// WHOLE numbers too (1000 -> "1"), silently corrupting every round
+		// numeric template value (batch quantities, counts) in rendered prompts.
+		return strconv.FormatFloat(t, 'f', -1, 64), nil
 	case int:
 		return fmt.Sprintf("%d", t), nil
 	case int64:

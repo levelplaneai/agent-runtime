@@ -103,3 +103,30 @@ func TestRender(t *testing.T) {
 		})
 	}
 }
+
+// Regression: whole numbers ending in zero must render verbatim. The old
+// TrimRight(Sprintf("%g")) implementation stripped trailing zeros of WHOLE
+// numbers too — {{ batch_size }} of 1000 rendered as "1", corrupting every
+// round numeric quantity in prompts (observed as should-costs quoting qty 1).
+func TestRenderRoundNumbers(t *testing.T) {
+	cases := map[float64]string{
+		1000:    "1000",
+		100:     "100",
+		10:      "10",
+		2000:    "2000",
+		10000:   "10000",
+		1500:    "1500",
+		1.5:     "1.5",
+		0.1:     "0.1",
+		1000000: "1000000",
+	}
+	for in, want := range cases {
+		got, err := Render("{{ v }}", map[string]any{"v": in})
+		if err != nil {
+			t.Fatalf("Render(%v): %v", in, err)
+		}
+		if got != want {
+			t.Errorf("Render(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
