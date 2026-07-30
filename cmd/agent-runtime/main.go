@@ -51,6 +51,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "flags:")
 	fmt.Fprintln(os.Stderr, "  --input key=value                               pass a flow input (repeatable)")
 	fmt.Fprintln(os.Stderr, "  --input key=@path/to/file.pdf                   pass a file as a flow input")
+	fmt.Fprintln(os.Stderr, "  --inputs-file <file>                            JSON file with flow inputs ({\"inputs\":{...}}); --input wins on conflict")
 	fmt.Fprintln(os.Stderr, "  --trace <file>                                  write JSON trace events to file")
 	fmt.Fprintln(os.Stderr, `  --tool name@version=https://host/path           register an HTTP tool (POST args as JSON to URL)`)
 	fmt.Fprintln(os.Stderr, `  --tool name@version='{"key":"value"}'           register a stub tool with a fixed JSON response`)
@@ -61,7 +62,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --to <node>                                     stop execution after this node (partial run)")
 	fmt.Fprintln(os.Stderr, "  --seed <file>                                   JSON file with pre-seeded node outputs ({\"seed_outputs\":{...}})")
 	fmt.Fprintln(os.Stderr, "  --checkpoint <file>                             atomically write a snapshot after every node")
-	fmt.Fprintln(os.Stderr, "  --resume <file>                                 resume from a checkpoint snapshot (replaces --input/--from/--seed)")
+	fmt.Fprintln(os.Stderr, "  --resume <file>                                 resume from a checkpoint snapshot (replaces --input/--inputs-file/--from/--seed)")
 }
 
 func cmdValidate(args []string) {
@@ -229,7 +230,7 @@ func cmdRun(args []string) {
 	// --resume: validate that conflicting flags are not set.
 	if flags.resumePath != "" {
 		if len(flags.inputs) > 0 || flags.startAt != "" || flags.seedPath != "" {
-			fmt.Fprintln(os.Stderr, "error: --resume cannot be combined with --input, --from, or --seed (state is in the snapshot)")
+			fmt.Fprintln(os.Stderr, "error: --resume cannot be combined with --input, --inputs-file, --from, or --seed (state is in the snapshot)")
 			os.Exit(1)
 		}
 		if flags.dataDir != "" && flags.runID != "" {
@@ -367,9 +368,10 @@ type runFlags struct {
 	resumePath     string
 }
 
-// parseRunFlags parses --input, --trace, --tool, --data-dir, and --run-id flags.
+// parseRunFlags parses --input, --inputs-file, --trace, --tool, --data-dir, and --run-id flags.
 //
 //	--input key=value                    flow input (repeatable)
+//	--inputs-file <file>                 flow inputs as JSON ({"inputs":{...}}); --input wins
 //	--trace <file>                       write JSON trace events to file
 //	--tool name@ver=https://host/path    HTTP tool (POST args as JSON to URL)
 //	--tool name@ver='<json>'             stub tool returning fixed JSON object
@@ -402,6 +404,14 @@ func parseRunFlags(args []string) (runFlags, error) {
 				f.inputs[key] = fv
 			} else {
 				f.inputs[key] = val
+			}
+		case "--inputs-file":
+			i++
+			if i >= len(args) {
+				return f, fmt.Errorf("--inputs-file requires a file path argument")
+			}
+			if err := mergeInputsFile(f.inputs, args[i]); err != nil {
+				return f, err
 			}
 		case "--trace":
 			i++
@@ -516,6 +526,46 @@ func parseToolArg(arg string) (ref string, tool runtime.Tool, err error) {
 	return ref, runtime.ToolFunc(func(_ context.Context, _ map[string]any) (map[string]any, error) {
 		return captured, nil
 	}), nil
+}
+
+// mergeInputsFile merges flow inputs from a JSON file into inputs.
+//
+// The file holds {"inputs": {...}} — same wrapper shape as --seed's {"seed_outputs": {...}}.
+// This exists because --input puts each value on argv, and Linux caps a SINGLE argv string at
+// MAX_ARG_STRLEN (32 pages = 128 KiB). A large object input (e.g. the prior_run re-run anchor)
+// blew that cap and failed the exec with E2BIG before the flow could start. A file keeps argv
+// small and fixed-size no matter how big the payload gets.
+//
+// Values land in the same map as --input, so nothing downstream (the --resume conflict guard,
+// RunFlow, tracing) needs to know how an input arrived.
+//
+// An existing key is NOT overwritten, so --input wins over the file regardless of flag order
+// (the --input case above assigns unconditionally). That protects the value kind: --input
+// key=@path stores a native runtime.FileValue, while this file yields plain JSON. Letting the
+// file clobber a FileValue would hand prompt nodes a string instead of document bytes — no
+// error, just a model that can't see the file. The Python SDK never sends the same key twice
+// (it partitions by type: files to argv, everything else to the file), so in practice this
+// only matters for hand-written invocations and as a guardrail if that ever changes.
+//
+// Unlike --input, values here keep their JSON types, so coerceDeclaredInputs is a no-op for
+// them — an object arrives as an object, not as a string needing a second Unmarshal.
+func mergeInputsFile(inputs map[string]any, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("--inputs-file: %w", err)
+	}
+	var doc struct {
+		Inputs map[string]any `json:"inputs"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("--inputs-file %q: %w", path, err)
+	}
+	for key, val := range doc.Inputs {
+		if _, exists := inputs[key]; !exists {
+			inputs[key] = val
+		}
+	}
+	return nil
 }
 
 // loadFileInput reads a file from path and returns a FileValue with detected MIME type.
