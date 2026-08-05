@@ -101,8 +101,18 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req CompletionRequest)
 		params.Tools = tools
 	}
 
-	resp, err := p.client.Messages.New(ctx, params)
-	if err != nil {
+	// Stream the response and accumulate it into a complete message. The API
+	// requires streaming for requests with large max_tokens (long-running
+	// generations); accumulating server-side events keeps Complete's
+	// whole-response contract intact for all downstream consumers.
+	stream := p.client.Messages.NewStreaming(ctx, params)
+	var resp anthropic.Message
+	for stream.Next() {
+		if err := resp.Accumulate(stream.Current()); err != nil {
+			return CompletionResponse{}, fmt.Errorf("anthropic: accumulating stream: %w", err)
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return CompletionResponse{}, fmt.Errorf("anthropic: API call failed: %w", err)
 	}
 
