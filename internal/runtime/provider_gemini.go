@@ -96,9 +96,43 @@ func (p *GeminiProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		return CompletionResponse{}, err
 	}
 
-	resp, err := p.client.Models.GenerateContent(ctx, req.Model, contents, cfg)
-	if err != nil {
-		return CompletionResponse{}, fmt.Errorf("gemini: API call failed: %w", err)
+	// Stream the response and merge chunks into a single response. The API
+	// requires streaming for requests with large max_output_tokens; merging keeps
+	// Complete's whole-response contract intact. Text deltas concatenate, while
+	// function-call and code-execution parts arrive complete per chunk, so
+	// appending all parts reproduces the non-streaming shape the parsing expects.
+	resp := &genai.GenerateContentResponse{}
+	var parts []*genai.Part
+	for chunk, err := range p.client.Models.GenerateContentStream(ctx, req.Model, contents, cfg) {
+		if err != nil {
+			return CompletionResponse{}, fmt.Errorf("gemini: API call failed: %w", err)
+		}
+		if chunk.UsageMetadata != nil {
+			resp.UsageMetadata = chunk.UsageMetadata
+		}
+		if len(chunk.Candidates) == 0 {
+			continue
+		}
+		cc := chunk.Candidates[0]
+		if resp.Candidates == nil {
+			resp.Candidates = []*genai.Candidate{{}}
+		}
+		mc := resp.Candidates[0]
+		if cc.FinishReason != "" {
+			mc.FinishReason = cc.FinishReason
+		}
+		if cc.FinishMessage != "" {
+			mc.FinishMessage = cc.FinishMessage
+		}
+		if cc.GroundingMetadata != nil {
+			mc.GroundingMetadata = cc.GroundingMetadata
+		}
+		if cc.Content != nil {
+			parts = append(parts, cc.Content.Parts...)
+		}
+	}
+	if len(resp.Candidates) > 0 && len(parts) > 0 {
+		resp.Candidates[0].Content = &genai.Content{Parts: parts}
 	}
 
 	if len(resp.Candidates) == 0 {

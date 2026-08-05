@@ -91,10 +91,25 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		params.Tools = oaiTools
 	}
 
-	resp, err := p.client.Chat.Completions.New(ctx, params)
-	if err != nil {
+	// Request usage stats on the final stream chunk; without this, streamed
+	// responses omit token counts.
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
+
+	// Stream the response and accumulate it into a complete ChatCompletion. The
+	// API requires streaming for requests with large max_tokens; the accumulator
+	// reassembles the full response (including tool-call deltas) so downstream
+	// handling is unchanged.
+	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
+	acc := openai.ChatCompletionAccumulator{}
+	for stream.Next() {
+		acc.AddChunk(stream.Current())
+	}
+	if err := stream.Err(); err != nil {
 		return CompletionResponse{}, fmt.Errorf("openai: API call failed: %w", err)
 	}
+	resp := acc.ChatCompletion
 	if len(resp.Choices) == 0 {
 		return CompletionResponse{}, fmt.Errorf("openai: no choices in response")
 	}
